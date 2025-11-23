@@ -1,0 +1,201 @@
+import React, { useState } from 'react';
+import {
+    View,
+    Text,
+    TextInput,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    StatusBar,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+
+const FONTS = [
+    { label: 'Homemade Apple', value: "'Homemade Apple', cursive" },
+    { label: 'Caveat', value: "'Caveat', cursive" },
+    { label: 'Liu Jian Mao Cao', value: "'Liu Jian Mao Cao', cursive" },
+];
+
+const COLORS = [
+    { label: 'Blue', value: '#000f55' },
+    { label: 'Black', value: 'black' },
+    { label: 'Red', value: '#ba3807' },
+];
+
+const EFFECTS = [
+    { label: 'Shadows', value: 'shadows' },
+    { label: 'Scanner', value: 'scanner' },
+    { label: 'No Effect', value: 'no-effect' },
+];
+
+export default function HomeScreen() {
+    const navigation = useNavigation();
+    const [text, setText] = useState('');
+    const [selectedFont, setSelectedFont] = useState(FONTS[0].value);
+    const [selectedColor, setSelectedColor] = useState(COLORS[0].value);
+    const [selectedEffect, setSelectedEffect] = useState(EFFECTS[0].value);
+
+    const handleGenerate = () => {
+        navigation.navigate('Output', {
+            text,
+            config: {
+                font: selectedFont,
+                inkColor: selectedColor,
+                effect: selectedEffect,
+                paperLines: true,
+                paperMargin: true,
+            },
+        });
+    };
+
+    const renderOption = (label, isSelected, onPress) => (
+        <TouchableOpacity
+            style={[styles.optionButton, isSelected && styles.optionButtonSelected]}
+            onPress={onPress}
+        >
+            <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
+                {label}
+            </Text>
+        </TouchableOpacity>
+    );
+
+    return (
+        <SafeAreaView style={styles.container}>
+            <StatusBar barStyle="light-content" backgroundColor="#121212" />
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+                <Text style={styles.header}>Inkjet</Text>
+                <Text style={styles.subHeader}>Text to Handwriting</Text>
+
+                <View style={styles.inputContainer}>
+                    <Text style={styles.label}>Input Text</Text>
+                    <TextInput
+                        style={styles.textInput}
+                        multiline
+                        placeholder="Type your text here..."
+                        placeholderTextColor="#666"
+                        value={text}
+                        onChangeText={setText}
+                        textAlignVertical="top"
+                    />
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Handwriting Font</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.optionsRow}>
+                        {FONTS.map((font) => (
+                            <View key={font.value} style={{ marginRight: 10 }}>
+                                {renderOption(font.label, selectedFont === font.value, () => setSelectedFont(font.value))}
+                            </View>
+                        ))}
+                    </ScrollView>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Ink Color</Text>
+                    <View style={styles.optionsRow}>
+                        {COLORS.map((color) => (
+                            <View key={color.value} style={{ marginRight: 10 }}>
+                                {renderOption(color.label, selectedColor === color.value, () => setSelectedColor(color.value))}
+                            </View>
+                        ))}
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Effect</Text>
+                    <View style={styles.optionsRow}>
+                        {EFFECTS.map((effect) => (
+                            <View key={effect.value} style={{ marginRight: 10 }}>
+                                {renderOption(effect.label, selectedEffect === effect.value, () => setSelectedEffect(effect.value))}
+                            </View>
+                        ))}
+                    </View>
+                </View>
+
+                <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
+                    <Text style={styles.generateButtonText}>Generate Image</Text>
+                </TouchableOpacity>
+            </ScrollView>
+        </SafeAreaView>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: '#121212',
+    },
+    scrollContent: {
+        padding: 20,
+    },
+    header: {
+        fontSize: 32,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginBottom: 5,
+    },
+    subHeader: {
+        fontSize: 16,
+        color: '#aaa',
+        marginBottom: 30,
+    },
+    inputContainer: {
+        marginBottom: 25,
+    },
+    label: {
+        fontSize: 14,
+        color: '#888',
+        marginBottom: 10,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+    },
+    textInput: {
+        backgroundColor: '#1e1e1e',
+        color: '#fff',
+        borderRadius: 12,
+        padding: 15,
+        height: 150,
+        fontSize: 16,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    section: {
+        marginBottom: 25,
+    },
+    optionsRow: {
+        flexDirection: 'row',
+    },
+    optionButton: {
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 20,
+        backgroundColor: '#1e1e1e',
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    optionButtonSelected: {
+        backgroundColor: '#333',
+        borderColor: '#fff',
+    },
+    optionText: {
+        color: '#888',
+        fontSize: 14,
+    },
+    optionTextSelected: {
+        color: '#fff',
+        fontWeight: 'bold',
+    },
+    generateButton: {
+        backgroundColor: '#fff',
+        paddingVertical: 18,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginTop: 20,
+    },
+    generateButtonText: {
+        color: '#000',
+        fontSize: 18,
+        fontWeight: 'bold',
+    },
+});
