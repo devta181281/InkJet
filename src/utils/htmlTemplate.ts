@@ -8,6 +8,10 @@ export const getHtmlTemplate = () => `
     <title>Handwriting Generator</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/1.5.3/jspdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    </script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Homemade+Apple|Roboto|Caveat|Liu+Jian+Mao+Cao&display=swap">
     <style>
         /* CSS Variables */
@@ -145,6 +149,32 @@ export const getHtmlTemplate = () => `
                 document.body.style.setProperty('--ink-color', config.inkColor);
             }
 
+            // Font Size
+            if (config.fontSize) {
+                pageEl.style.fontSize = \`\${config.fontSize}pt\`;
+            }
+
+            // Letter Spacing
+            if (config.letterSpacing !== undefined) {
+                pageEl.style.letterSpacing = \`\${config.letterSpacing}pt\`;
+            }
+
+            // Word Spacing
+            if (config.wordSpacing !== undefined) {
+                pageEl.style.wordSpacing = \`\${config.wordSpacing}px\`;
+            }
+
+            // Vertical Position (Top Padding)
+            if (config.topPadding !== undefined) {
+                paperContentEl.style.paddingTop = \`\${config.topPadding}px\`;
+            }
+
+            // Page Size
+            if (config.pageSize === 'a4') {
+                pageEl.style.width = '595px';
+                pageEl.style.minHeight = '842px';
+            }
+
             // Paper Lines
             if (config.paperLines === false) {
                 pageEl.classList.remove('lines');
@@ -174,6 +204,11 @@ export const getHtmlTemplate = () => `
             pageEl.style.overflowY = 'auto';
             pageEl.style.border = '1px solid var(--elevation-background)';
             overlayEl.className = 'overlay';
+            // Reset styles that might persist
+            pageEl.style.fontSize = '';
+            pageEl.style.letterSpacing = '';
+            pageEl.style.wordSpacing = '';
+            paperContentEl.style.paddingTop = '';
         }
 
         function contrastImage(imageData, contrast) {
@@ -192,23 +227,14 @@ export const getHtmlTemplate = () => `
             applyPaperStyles(config);
             paperContentEl.textContent = text;
             
-            // Wait for fonts to load?
             await document.fonts.ready;
 
-            // Pagination logic could go here, but for now let's do single page or simple scroll
-            // The reference logic handles pagination by splitting words. 
-            // For simplicity in this first pass, we'll just capture the whole thing or one page.
-            // But user wanted "exact functionality".
+            // Use configured resolution or default to 2 (Normal)
+            const resolution = config.resolution || 2;
             
             const clientHeight = 842 - 50; // Approx A4 height minus margins
             const scrollHeight = paperContentEl.scrollHeight;
             
-            // If text is too long, we might need to split. 
-            // For now, let's just resize the page to fit content if it's a single image, 
-            // or implement the split logic.
-            // Implementing split logic in a single WebView pass is complex because we need to generate multiple images.
-            
-            // Let's implement the split logic from reference.
             const totalPages = Math.ceil(scrollHeight / clientHeight);
             const outputImages = [];
             
@@ -227,33 +253,34 @@ export const getHtmlTemplate = () => `
                         wordCount++;
                     }
                     
-                    // Backtrack one word if we overflowed
                     if (paperContentEl.scrollHeight > clientHeight) {
                         wordArray.pop();
                         wordCount--;
                         paperContentEl.textContent = wordArray.join('');
                     }
                     
-                    await capturePage(outputImages, config);
+                    await capturePage(outputImages, config, resolution);
                 }
             } else {
-                await capturePage(outputImages, config);
+                await capturePage(outputImages, config, resolution);
             }
 
             removePaperStyles();
             
-            // Send back results
+            // Store globally for PDF generation
+            window.storedOutputImages = outputImages;
+
             window.ReactNativeWebView.postMessage(JSON.stringify({
                 type: 'SUCCESS',
                 images: outputImages
             }));
         }
 
-        async function capturePage(outputImages, config) {
+        async function capturePage(outputImages, config, resolution) {
             const options = {
                 scrollX: 0,
                 scrollY: -window.scrollY,
-                scale: 2, // Normal resolution
+                scale: resolution,
                 useCORS: true
             };
             
@@ -269,6 +296,87 @@ export const getHtmlTemplate = () => `
             outputImages.push(canvas.toDataURL('image/jpeg'));
         }
 
+        function generatePDF(images) {
+            if (!images || images.length === 0) return;
+            
+            try {
+                const doc = new jsPDF('p', 'pt', 'a4');
+                const width = doc.internal.pageSize.width;
+                const height = doc.internal.pageSize.height;
+                
+                for (let i = 0; i < images.length; i++) {
+                    doc.text(10, 20, '');
+                    doc.addImage(
+                        images[i],
+                        'JPEG',
+                        25,
+                        50,
+                        width - 50,
+                        height - 80,
+                        'image-' + i
+                    );
+                    if (i !== images.length - 1) {
+                        doc.addPage();
+                    }
+                }
+                
+                // Use Blob -> FileReader for more robust Base64 generation
+                const blob = doc.output('blob');
+                const reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onloadend = function() {
+                    const base64data = reader.result;
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'PDF_SUCCESS',
+                        data: base64data
+                    }));
+                };
+                reader.onerror = function() {
+                     window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'ERROR',
+                        data: 'Failed to convert PDF blob to base64'
+                    }));
+                };
+
+            } catch (error) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'ERROR',
+                    data: 'PDF Generation failed: ' + error.message
+                }));
+            }
+        }
+
+        async function extractTextFromPDF(base64Data) {
+            try {
+                // Remove header if present
+                const cleanData = base64Data.replace(/^data:application\\/pdf;base64,/, "");
+                const pdfData = atob(cleanData);
+                
+                const loadingTask = pdfjsLib.getDocument({data: pdfData});
+                const pdf = await loadingTask.promise;
+                
+                let fullText = '';
+                
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const pageText = textContent.items.map(item => item.str).join(' ');
+                    fullText += pageText + '\\n\\n';
+                }
+                
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'PDF_TEXT_EXTRACTED',
+                    data: fullText
+                }));
+                
+            } catch (error) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'ERROR',
+                    data: 'Failed to extract text from PDF: ' + error.message
+                }));
+            }
+        }
+
         // Message Listener
         document.addEventListener("message", handleMessage);
         window.addEventListener("message", handleMessage);
@@ -278,6 +386,10 @@ export const getHtmlTemplate = () => `
                 const data = JSON.parse(event.data);
                 if (data.type === 'GENERATE') {
                     generateImages(data.text, data.config);
+                } else if (data.type === 'GENERATE_PDF') {
+                    generatePDF(window.storedOutputImages || []);
+                } else if (data.type === 'EXTRACT_TEXT_FROM_PDF') {
+                    extractTextFromPDF(data.data);
                 }
             } catch (e) {
                 // ignore
