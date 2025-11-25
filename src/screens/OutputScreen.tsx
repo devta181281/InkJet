@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
     View,
     Text,
@@ -11,34 +11,25 @@ import {
     Platform,
     PermissionsAndroid,
     ToastAndroid,
+    Dimensions,
+    StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
-import HandwritingGenerator, { HandwritingGeneratorRef } from '../components/HandwritingGenerator';
+import { WebView } from 'react-native-webview';
+import { getHtmlTemplate } from '../utils/htmlTemplate';
+
+const { width } = Dimensions.get('window');
 
 export default function OutputScreen() {
     const route = useRoute();
     const navigation = useNavigation();
-    const generatorRef = useRef<HandwritingGeneratorRef>(null);
-    const [generatedImages, setGeneratedImages] = useState<string[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const { text, config } = route.params as any;
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            if (text && generatorRef.current) {
-                generatorRef.current.generate(text, config);
-            }
-        }, 1000);
-        return () => clearTimeout(timer);
-    }, [text, config]);
-
-    const handleImagesGenerated = (images: string[]) => {
-        setGeneratedImages(images);
-        setIsLoading(false);
-    };
+    const { images } = route.params as { images: string[] };
+    const [isLoading, setIsLoading] = useState(false);
+    const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+    const webViewRef = useRef<WebView>(null);
 
     const saveToCache = async (base64Data: string, index: number) => {
         const fileName = `handwriting_${Date.now()}_${index}.jpg`;
@@ -65,7 +56,6 @@ export default function OutputScreen() {
     const handleDownload = async (base64Data: string, index: number) => {
         try {
             if (Platform.OS === 'android') {
-                // Request permission for older Androids
                 if (Platform.Version < 29) {
                     const granted = await PermissionsAndroid.request(
                         PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE
@@ -78,7 +68,6 @@ export default function OutputScreen() {
             }
 
             const fileName = `handwriting_${Date.now()}_${index}.jpg`;
-            // On Android, DownloadDirectoryPath is usually available
             const downloadPath = Platform.OS === 'android'
                 ? `${RNFS.DownloadDirectoryPath}/${fileName}`
                 : `${RNFS.DocumentDirectoryPath}/${fileName}`;
@@ -98,148 +87,127 @@ export default function OutputScreen() {
         }
     };
 
-    const handlePdfGenerated = async (base64Data: string) => {
+    const handleSavePdf = async (base64Data: string) => {
         try {
-            console.log('OutputScreen: PDF Generated, data length:', base64Data ? base64Data.length : 'null');
-
-            if (!base64Data) {
-                throw new Error('No PDF data received');
-            }
-
-            // Clean the base64 data
-            // Remove "data:application/pdf;base64," header if present
-            const cleanData = base64Data.split(',').pop()?.replace(/\s/g, '') || '';
-
-            if (cleanData.length === 0) {
-                throw new Error('PDF data is empty after cleaning');
+            if (Platform.OS === 'android') {
+                if (Platform.Version < 29) {
+                    const granted = await PermissionsAndroid.request(
+                        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE
+                    );
+                    if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                        Alert.alert('Permission Denied', 'Cannot save PDF without storage permission.');
+                        return;
+                    }
+                }
             }
 
             const fileName = `handwriting_${Date.now()}.pdf`;
-            const cachePath = `${RNFS.CachesDirectoryPath}/${fileName}`;
+            const downloadPath = Platform.OS === 'android'
+                ? `${RNFS.DownloadDirectoryPath}/${fileName}`
+                : `${RNFS.DocumentDirectoryPath}/${fileName}`;
 
-            console.log('OutputScreen: Writing to cache path:', cachePath);
-
-            // Write to cache first (most reliable)
-            await RNFS.writeFile(cachePath, cleanData, 'base64');
+            const cleanBase64 = base64Data.replace(/^data:application\/pdf;base64,/, "");
+            await RNFS.writeFile(downloadPath, cleanBase64, 'base64');
 
             if (Platform.OS === 'android') {
-                // Force request permission to ensure dialog shows
-                const granted = await PermissionsAndroid.request(
-                    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-                    {
-                        title: 'Storage Permission Required',
-                        message: 'App needs access to your storage to download the PDF',
-                        buttonNeutral: 'Ask Me Later',
-                        buttonNegative: 'Cancel',
-                        buttonPositive: 'OK',
-                    }
-                );
-
-                const downloadPath = `${RNFS.DownloadDirectoryPath}/${fileName}`;
-
-                try {
-                    await RNFS.copyFile(cachePath, downloadPath);
-                    Alert.alert('Success', `PDF saved to Downloads:\n${fileName}`);
-                } catch (copyError) {
-                    console.log('Copy failed, trying to share...', copyError);
-                    // Fallback to share
-                    await Share.open({
-                        url: `file://${cachePath}`,
-                        type: 'application/pdf',
-                        title: 'Share PDF',
-                    });
-                }
+                ToastAndroid.show(`Saved to ${downloadPath}`, ToastAndroid.LONG);
             } else {
-                const documentsPath = `${RNFS.DocumentDirectoryPath}/${fileName}`;
-                try {
-                    await RNFS.copyFile(cachePath, documentsPath);
-                    Alert.alert('Success', 'PDF saved to Documents');
-                } catch (copyError) {
-                    await Share.open({
-                        url: `file://${cachePath}`,
-                        type: 'application/pdf',
-                        title: 'Share PDF',
-                    });
-                }
+                Alert.alert('Saved', `PDF saved to ${downloadPath}`);
             }
-
         } catch (error) {
-            console.error('OutputScreen: File write failed:', error);
-
-            try {
-                console.log('OutputScreen: Falling back to sharing raw base64');
-                // Fallback to sharing raw base64 if file write fails
-                const cleanData = base64Data.split(',').pop()?.replace(/\s/g, '') || '';
-                await Share.open({
-                    url: `data:application/pdf;base64,${cleanData}`,
-                    title: 'Share PDF',
-                    type: 'application/pdf'
-                });
-            } catch (shareError) {
-                console.error('OutputScreen: PDF Save Error:', shareError);
-                Alert.alert('Error', 'Failed to save PDF.');
-            }
+            console.error('PDF Save Error:', error);
+            Alert.alert('Error', 'Failed to save PDF');
+        } finally {
+            setIsGeneratingPdf(false);
         }
     };
 
-    const handleDownloadPdf = () => {
-        if (generatorRef.current) {
-            ToastAndroid.show('Generating PDF...', ToastAndroid.SHORT);
-            generatorRef.current.downloadPDF();
+    const generatePdf = () => {
+        setIsGeneratingPdf(true);
+        webViewRef.current?.injectJavaScript(`
+            window.postMessage(JSON.stringify({
+                type: 'GENERATE_PDF',
+                images: ${JSON.stringify(images)}
+            }));
+        `);
+    };
+
+    const handleMessage = (event: any) => {
+        try {
+            const data = JSON.parse(event.nativeEvent.data);
+            if (data.type === 'PDF_SUCCESS') {
+                handleSavePdf(data.data);
+            } else if (data.type === 'ERROR') {
+                console.error('WebView Error:', data.data);
+                setIsGeneratingPdf(false);
+                Alert.alert('Error', 'PDF Generation failed');
+            }
+        } catch (error) {
+            console.error('Error parsing message:', error);
+            setIsGeneratingPdf(false);
         }
     };
 
     return (
         <SafeAreaView style={styles.container}>
+            <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                     <Text style={styles.backButtonText}>← Back</Text>
                 </TouchableOpacity>
-                <Text style={styles.title}>Output</Text>
-                <TouchableOpacity onPress={handleDownloadPdf} style={styles.pdfButton}>
-                    <Text style={styles.pdfButtonText}>PDF</Text>
+                <Text style={styles.headerTitle}>Result</Text>
+                <View style={{ width: 60 }} />
+            </View>
+
+            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+                {images.map((img, index) => (
+                    <View key={index} style={styles.imageCard}>
+                        <Image
+                            source={{ uri: img }}
+                            style={styles.image}
+                            resizeMode="contain"
+                        />
+                        <View style={styles.actionRow}>
+                            <TouchableOpacity
+                                style={styles.actionButton}
+                                onPress={() => handleDownload(img, index)}
+                            >
+                                <Text style={styles.actionButtonText}>Save Image</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.secondaryButton]}
+                                onPress={() => handleShare(img, index)}
+                            >
+                                <Text style={styles.secondaryButtonText}>Share</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                ))}
+            </ScrollView>
+
+            <View style={styles.footer}>
+                <TouchableOpacity
+                    style={styles.pdfButton}
+                    onPress={generatePdf}
+                    disabled={isGeneratingPdf}
+                >
+                    {isGeneratingPdf ? (
+                        <ActivityIndicator color="#fff" />
+                    ) : (
+                        <Text style={styles.pdfButtonText}>Download as PDF</Text>
+                    )}
                 </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.content}>
-                {isLoading ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#fff" />
-                        <Text style={styles.loadingText}>Generating Handwriting...</Text>
-                    </View>
-                ) : (
-                    generatedImages.map((img, index) => (
-                        <View key={index} style={styles.imageContainer}>
-                            <Image
-                                source={{ uri: img }}
-                                style={styles.image}
-                                resizeMode="contain"
-                            />
-                            <View style={styles.buttonRow}>
-                                <TouchableOpacity
-                                    style={[styles.actionButton, styles.downloadButton]}
-                                    onPress={() => handleDownload(img, index)}
-                                >
-                                    <Text style={styles.buttonText}>Download</Text>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={[styles.actionButton, styles.shareButton]}
-                                    onPress={() => handleShare(img, index)}
-                                >
-                                    <Text style={styles.buttonText}>Share</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    ))
-                )}
-            </ScrollView>
-
-            <HandwritingGenerator
-                ref={generatorRef}
-                onImagesGenerated={handleImagesGenerated}
-                onPdfGenerated={handlePdfGenerated}
-            />
+            <View style={{ height: 0, opacity: 0 }}>
+                <WebView
+                    ref={webViewRef}
+                    source={{ html: getHtmlTemplate(), baseUrl: '' }}
+                    onMessage={handleMessage}
+                    javaScriptEnabled={true}
+                />
+            </View>
         </SafeAreaView>
     );
 }
@@ -247,90 +215,104 @@ export default function OutputScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#121212',
+        backgroundColor: '#ffffff',
     },
     header: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        padding: 20,
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingVertical: 16,
         borderBottomWidth: 1,
-        borderBottomColor: '#333',
+        borderBottomColor: '#f0f0f0',
     },
     backButton: {
-        padding: 10,
+        padding: 8,
     },
     backButtonText: {
-        color: '#fff',
         fontSize: 16,
+        color: '#1a1a1a',
+        fontWeight: '500',
     },
-    title: {
-        color: '#fff',
+    headerTitle: {
         fontSize: 18,
-        fontWeight: 'bold',
+        fontWeight: '700',
+        color: '#1a1a1a',
     },
-    pdfButton: {
-        backgroundColor: '#333',
-        paddingVertical: 6,
-        paddingHorizontal: 12,
-        borderRadius: 6,
+    scrollContent: {
+        padding: 24,
+        paddingBottom: 100,
+    },
+    imageCard: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 24,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 12,
+        elevation: 4,
         borderWidth: 1,
-        borderColor: '#fff',
-    },
-    pdfButtonText: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: 'bold',
-    },
-    content: {
-        padding: 20,
-        alignItems: 'center',
-    },
-    loadingContainer: {
-        marginTop: 100,
-        alignItems: 'center',
-    },
-    loadingText: {
-        color: '#888',
-        marginTop: 20,
-        fontSize: 16,
-    },
-    imageContainer: {
-        width: '100%',
-        marginBottom: 30,
-        alignItems: 'center',
+        borderColor: '#f0f0f0',
     },
     image: {
         width: '100%',
-        height: 400, // Fixed height for preview
-        backgroundColor: '#fff',
-        marginBottom: 15,
+        aspectRatio: 0.707, // A4 ratio
+        backgroundColor: '#f8f9fa',
         borderRadius: 8,
     },
-    buttonRow: {
+    actionRow: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
-        width: '100%',
-        paddingHorizontal: 20,
+        marginTop: 16,
+        gap: 12,
     },
     actionButton: {
         flex: 1,
+        backgroundColor: '#f0f0f0',
         paddingVertical: 12,
-        borderRadius: 25,
+        borderRadius: 8,
         alignItems: 'center',
-        marginHorizontal: 5,
     },
-    downloadButton: {
-        backgroundColor: '#333',
+    actionButtonText: {
+        color: '#1a1a1a',
+        fontWeight: '600',
+        fontSize: 14,
+    },
+    secondaryButton: {
+        backgroundColor: '#fff',
         borderWidth: 1,
-        borderColor: '#fff',
+        borderColor: '#eee',
     },
-    shareButton: {
-        backgroundColor: '#1a73e8',
+    secondaryButtonText: {
+        color: '#666',
+        fontWeight: '600',
+        fontSize: 14,
     },
-    buttonText: {
+    footer: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: 24,
+        backgroundColor: '#ffffff',
+        borderTopWidth: 1,
+        borderTopColor: '#f0f0f0',
+    },
+    pdfButton: {
+        backgroundColor: '#1a1a1a',
+        paddingVertical: 18,
+        borderRadius: 16,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    pdfButtonText: {
         color: '#fff',
-        fontWeight: 'bold',
         fontSize: 16,
+        fontWeight: '700',
     },
 });

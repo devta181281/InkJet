@@ -5,7 +5,6 @@ import {
     TextInput,
     StyleSheet,
     TouchableOpacity,
-    ScrollView,
     StatusBar,
     Alert,
     ActivityIndicator,
@@ -16,65 +15,14 @@ import DocumentPicker from 'react-native-document-picker';
 import RNFS from 'react-native-fs';
 import HandwritingGenerator, { HandwritingGeneratorRef } from '../components/HandwritingGenerator';
 
-const FONTS = [
-    { label: 'Homemade Apple', value: "'Homemade Apple', cursive" },
-    { label: 'Caveat', value: "'Caveat', cursive" },
-    { label: 'Liu Jian Mao Cao', value: "'Liu Jian Mao Cao', cursive" },
-];
-
-const COLORS = [
-    { label: 'Blue', value: '#000f55' },
-    { label: 'Black', value: 'black' },
-    { label: 'Red', value: '#ba3807' },
-];
-
-const EFFECTS = [
-    { label: 'Shadows', value: 'shadows' },
-    { label: 'Scanner', value: 'scanner' },
-    { label: 'No Effect', value: 'no-effect' },
-];
-
-const RESOLUTIONS = [
-    { label: 'Very Low', value: 0.8 },
-    { label: 'Low', value: 1 },
-    { label: 'Normal', value: 2 },
-    { label: 'High', value: 3 },
-    { label: 'Very High', value: 4 },
-];
-
 export default function HomeScreen() {
     const navigation = useNavigation();
     const generatorRef = useRef<HandwritingGeneratorRef>(null);
     const [text, setText] = useState('');
-    const [selectedFont, setSelectedFont] = useState(FONTS[0].value);
-    const [selectedColor, setSelectedColor] = useState(COLORS[0].value);
-    const [selectedEffect, setSelectedEffect] = useState(EFFECTS[0].value);
     const [isExtracting, setIsExtracting] = useState(false);
 
-    // New Options
-    const [fontSize, setFontSize] = useState('10');
-    const [resolution, setResolution] = useState(2);
-    const [topPadding, setTopPadding] = useState('5');
-    const [wordSpacing, setWordSpacing] = useState('0');
-    const [letterSpacing, setLetterSpacing] = useState('0');
-
-    const handleGenerate = () => {
-        navigation.navigate('Output', {
-            text,
-            config: {
-                font: selectedFont,
-                inkColor: selectedColor,
-                effect: selectedEffect,
-                paperLines: true,
-                paperMargin: true,
-                fontSize: parseFloat(fontSize) || 10,
-                resolution: resolution,
-                topPadding: parseFloat(topPadding) || 5,
-                wordSpacing: parseFloat(wordSpacing) || 0,
-                letterSpacing: parseFloat(letterSpacing) || 0,
-                pageSize: 'a4',
-            },
-        });
+    const handleNext = () => {
+        navigation.navigate('Styling', { text });
     };
 
     const handleImportPdf = async () => {
@@ -111,153 +59,56 @@ export default function HomeScreen() {
         Alert.alert('Success', 'Text extracted from PDF!');
     };
 
-    const renderOption = (label: string, isSelected: boolean, onPress: () => void) => (
-        <TouchableOpacity
-            style={[styles.optionButton, isSelected && styles.optionButtonSelected]}
-            onPress={onPress}
-        >
-            <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
-                {label}
-            </Text>
-        </TouchableOpacity>
-    );
-
     return (
         <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#121212" />
-            <ScrollView contentContainerStyle={styles.scrollContent}>
-                <Text style={styles.header}>Inkjet</Text>
-                <Text style={styles.subHeader}>Text to Handwriting</Text>
+            <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+            <View style={styles.content}>
+                <View style={styles.headerContainer}>
+                    <Text style={styles.headerTitle}>Inkjet</Text>
+                    <Text style={styles.headerSubtitle}>Turn your digital text into handwriting</Text>
+                </View>
 
-                <View style={styles.inputContainer}>
-                    <View style={styles.labelRow}>
-                        <Text style={styles.label}>Input Text</Text>
-                        <TouchableOpacity onPress={handleImportPdf} style={styles.importButton} disabled={isExtracting}>
-                            {isExtracting ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                                <Text style={styles.importButtonText}>Import PDF</Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
+                <View style={styles.inputCard}>
                     <TextInput
                         style={styles.textInput}
                         multiline
-                        placeholder="Type your text here..."
-                        placeholderTextColor="#666"
+                        placeholder="Start typing or import a PDF..."
+                        placeholderTextColor="#999"
                         value={text}
                         onChangeText={setText}
                         textAlignVertical="top"
                     />
-                </View>
 
-                <View style={styles.section}>
-                    <Text style={styles.label}>Handwriting Font</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.optionsRow}>
-                        {FONTS.map((font) => (
-                            <View key={font.value} style={{ marginRight: 10 }}>
-                                {renderOption(font.label, selectedFont === font.value, () => setSelectedFont(font.value))}
-                            </View>
-                        ))}
-                    </ScrollView>
-                </View>
-
-                <View style={styles.section}>
-                    <Text style={styles.label}>Ink Color</Text>
-                    <View style={styles.optionsRow}>
-                        {COLORS.map((color) => (
-                            <View key={color.value} style={{ marginRight: 10 }}>
-                                {renderOption(color.label, selectedColor === color.value, () => setSelectedColor(color.value))}
-                            </View>
-                        ))}
+                    <View style={styles.inputActions}>
+                        <TouchableOpacity
+                            onPress={handleImportPdf}
+                            style={styles.iconButton}
+                            disabled={isExtracting}
+                        >
+                            {isExtracting ? (
+                                <ActivityIndicator size="small" color="#666" />
+                            ) : (
+                                <Text style={styles.iconButtonText}>📄 Import PDF</Text>
+                            )}
+                        </TouchableOpacity>
+                        <Text style={styles.characterCount}>{text.length} chars</Text>
                     </View>
                 </View>
 
-                <View style={styles.section}>
-                    <Text style={styles.label}>Page & Text Options</Text>
-
-                    <View style={styles.row}>
-                        <View style={styles.halfInput}>
-                            <Text style={styles.subLabel}>Font Size (pt)</Text>
-                            <TextInput
-                                style={styles.numberInput}
-                                keyboardType="numeric"
-                                value={fontSize}
-                                onChangeText={setFontSize}
-                            />
-                        </View>
-                        <View style={styles.halfInput}>
-                            <Text style={styles.subLabel}>Page Size</Text>
-                            <View style={[styles.numberInput, { justifyContent: 'center' }]}>
-                                <Text style={{ color: '#fff' }}>A4</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    <Text style={[styles.subLabel, { marginTop: 15 }]}>Resolution</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.optionsRow}>
-                        {RESOLUTIONS.map((res) => (
-                            <View key={res.value} style={{ marginRight: 10 }}>
-                                {renderOption(res.label, resolution === res.value, () => setResolution(res.value))}
-                            </View>
-                        ))}
-                    </ScrollView>
-                </View>
-
-                <View style={styles.section}>
-                    <Text style={styles.label}>Effect</Text>
-                    <View style={styles.optionsRow}>
-                        {EFFECTS.map((effect) => (
-                            <View key={effect.value} style={{ marginRight: 10 }}>
-                                {renderOption(effect.label, selectedEffect === effect.value, () => setSelectedEffect(effect.value))}
-                            </View>
-                        ))}
-                    </View>
-                </View>
-
-                <View style={styles.section}>
-                    <Text style={styles.label}>Spacing Options</Text>
-
-                    <View style={styles.row}>
-                        <View style={styles.thirdInput}>
-                            <Text style={styles.subLabel}>Vertical Pos</Text>
-                            <TextInput
-                                style={styles.numberInput}
-                                keyboardType="numeric"
-                                value={topPadding}
-                                onChangeText={setTopPadding}
-                            />
-                        </View>
-                        <View style={styles.thirdInput}>
-                            <Text style={styles.subLabel}>Word Spacing</Text>
-                            <TextInput
-                                style={styles.numberInput}
-                                keyboardType="numeric"
-                                value={wordSpacing}
-                                onChangeText={setWordSpacing}
-                            />
-                        </View>
-                        <View style={styles.thirdInput}>
-                            <Text style={styles.subLabel}>Letter Spacing</Text>
-                            <TextInput
-                                style={styles.numberInput}
-                                keyboardType="numeric"
-                                value={letterSpacing}
-                                onChangeText={setLetterSpacing}
-                            />
-                        </View>
-                    </View>
-                </View>
-
-                <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
-                    <Text style={styles.generateButtonText}>Generate Image</Text>
+                <TouchableOpacity
+                    style={[styles.fab, !text.trim() && styles.fabDisabled]}
+                    onPress={handleNext}
+                    disabled={!text.trim()}
+                >
+                    <Text style={styles.fabText}>Next ➜</Text>
                 </TouchableOpacity>
-            </ScrollView>
+            </View>
 
             <HandwritingGenerator
                 ref={generatorRef}
                 onImagesGenerated={() => { }}
                 onPdfTextExtracted={handlePdfTextExtracted}
+                style={styles.hiddenGenerator}
             />
         </SafeAreaView>
     );
@@ -266,122 +117,95 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#121212',
+        backgroundColor: '#ffffff',
     },
-    scrollContent: {
-        padding: 20,
-        paddingBottom: 50,
+    content: {
+        flex: 1,
+        padding: 24,
     },
-    header: {
+    headerContainer: {
+        marginTop: 20,
+        marginBottom: 40,
+    },
+    headerTitle: {
         fontSize: 32,
-        fontWeight: 'bold',
-        color: '#fff',
-        marginBottom: 5,
+        fontWeight: '700',
+        color: '#1a1a1a',
+        letterSpacing: -0.5,
     },
-    subHeader: {
+    headerSubtitle: {
         fontSize: 16,
-        color: '#aaa',
-        marginBottom: 30,
+        color: '#666',
+        marginTop: 8,
     },
-    inputContainer: {
-        marginBottom: 25,
-    },
-    labelRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 10,
-    },
-    label: {
-        fontSize: 14,
-        color: '#888',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-    },
-    importButton: {
-        backgroundColor: '#333',
-        paddingVertical: 5,
-        paddingHorizontal: 10,
-        borderRadius: 5,
-        borderWidth: 1,
-        borderColor: '#555',
-    },
-    importButtonText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    subLabel: {
-        fontSize: 12,
-        color: '#aaa',
-        marginBottom: 5,
+    inputCard: {
+        flex: 1,
+        backgroundColor: '#f8f9fa',
+        borderRadius: 24,
+        padding: 20,
+        marginBottom: 100, // Space for FAB
     },
     textInput: {
-        backgroundColor: '#1e1e1e',
-        color: '#fff',
-        borderRadius: 12,
-        padding: 15,
-        height: 150,
+        flex: 1,
         fontSize: 16,
-        borderWidth: 1,
-        borderColor: '#333',
+        color: '#333',
+        lineHeight: 24,
+        padding: 0,
     },
-    numberInput: {
-        backgroundColor: '#1e1e1e',
-        color: '#fff',
-        borderRadius: 8,
-        padding: 10,
-        fontSize: 14,
-        borderWidth: 1,
-        borderColor: '#333',
-        textAlign: 'center',
-    },
-    section: {
-        marginBottom: 25,
-    },
-    optionsRow: {
-        flexDirection: 'row',
-    },
-    row: {
+    inputActions: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-    },
-    halfInput: {
-        width: '48%',
-    },
-    thirdInput: {
-        width: '31%',
-    },
-    optionButton: {
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderRadius: 20,
-        backgroundColor: '#1e1e1e',
-        borderWidth: 1,
-        borderColor: '#333',
-    },
-    optionButtonSelected: {
-        backgroundColor: '#333',
-        borderColor: '#fff',
-    },
-    optionText: {
-        color: '#888',
-        fontSize: 14,
-    },
-    optionTextSelected: {
-        color: '#fff',
-        fontWeight: 'bold',
-    },
-    generateButton: {
-        backgroundColor: '#fff',
-        paddingVertical: 18,
-        borderRadius: 12,
         alignItems: 'center',
-        marginTop: 20,
+        marginTop: 16,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: '#eee',
     },
-    generateButtonText: {
-        color: '#000',
-        fontSize: 18,
-        fontWeight: 'bold',
+    iconButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#eee',
+    },
+    iconButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#444',
+    },
+    characterCount: {
+        fontSize: 12,
+        color: '#999',
+    },
+    fab: {
+        position: 'absolute',
+        bottom: 32,
+        right: 24,
+        backgroundColor: '#1a1a1a',
+        paddingVertical: 16,
+        paddingHorizontal: 32,
+        borderRadius: 32,
+        elevation: 4,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+    },
+    fabDisabled: {
+        backgroundColor: '#ccc',
+        elevation: 0,
+        shadowOpacity: 0,
+    },
+    fabText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '600',
+    },
+    hiddenGenerator: {
+        position: 'absolute',
+        width: 0,
+        height: 0,
+        opacity: 0,
     },
 });

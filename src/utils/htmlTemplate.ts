@@ -1,4 +1,6 @@
 
+import { pdfJsLib, pdfJsWorker } from './pdfJsAssets';
+
 export const getHtmlTemplate = () => `
 <!DOCTYPE html>
 <html lang="en">
@@ -6,11 +8,19 @@ export const getHtmlTemplate = () => `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Handwriting Generator</title>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/1.5.3/jspdf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script>
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        ${pdfJsLib}
+    </script>
+    <script id="pdf-worker" type="javascript/worker">
+        ${pdfJsWorker}
+    </script>
+    <script>
+        var workerContent = document.getElementById('pdf-worker').textContent;
+        var blob = new Blob([workerContent], { type: 'text/javascript' });
+        pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
     </script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Homemade+Apple|Roboto|Caveat|Liu+Jian+Mao+Cao&display=swap">
     <style>
@@ -136,9 +146,6 @@ export const getHtmlTemplate = () => `
         const overlayEl = document.querySelector('.overlay');
 
         function applyPaperStyles(config) {
-            pageEl.style.border = 'none';
-            pageEl.style.overflowY = 'hidden';
-            
             // Font
             if (config.font) {
                 document.body.style.setProperty('--handwriting-font', config.font);
@@ -199,18 +206,7 @@ export const getHtmlTemplate = () => `
                 overlayEl.style.background = \`linear-gradient(\${Math.random() * 360}deg, #0008, #0000)\`;
             }
         }
-
-        function removePaperStyles() {
-            pageEl.style.overflowY = 'auto';
-            pageEl.style.border = '1px solid var(--elevation-background)';
-            overlayEl.className = 'overlay';
-            // Reset styles that might persist
-            pageEl.style.fontSize = '';
-            pageEl.style.letterSpacing = '';
-            pageEl.style.wordSpacing = '';
-            paperContentEl.style.paddingTop = '';
-        }
-
+        
         function contrastImage(imageData, contrast) {
             const data = imageData.data;
             contrast *= 255;
@@ -223,11 +219,14 @@ export const getHtmlTemplate = () => `
             return imageData;
         }
 
-        async function generateImages(text, config) {
+        async function updatePreview(text, config) {
             applyPaperStyles(config);
             paperContentEl.textContent = text;
-            
             await document.fonts.ready;
+        }
+
+        async function generateImage(text, config) {
+            await updatePreview(text, config);
 
             // Use configured resolution or default to 2 (Normal)
             const resolution = config.resolution || 2;
@@ -245,7 +244,6 @@ export const getHtmlTemplate = () => `
                 for (let i = 0; i < totalPages; i++) {
                     paperContentEl.innerHTML = '';
                     const wordArray = [];
-                    let wordString = '';
                     
                     while (paperContentEl.scrollHeight <= clientHeight && wordCount < words.length) {
                         wordArray.push(words[wordCount]);
@@ -264,8 +262,6 @@ export const getHtmlTemplate = () => `
             } else {
                 await capturePage(outputImages, config, resolution);
             }
-
-            removePaperStyles();
             
             // Store globally for PDF generation
             window.storedOutputImages = outputImages;
@@ -281,9 +277,13 @@ export const getHtmlTemplate = () => `
                 scrollX: 0,
                 scrollY: -window.scrollY,
                 scale: resolution,
-                useCORS: true
+                useCORS: true,
+                backgroundColor: null, // Make background transparent
             };
             
+            pageEl.style.border = 'none';
+            pageEl.style.overflowY = 'hidden';
+
             const canvas = await html2canvas(pageEl, options);
             
             if (config.effect === 'scanner') {
@@ -294,7 +294,11 @@ export const getHtmlTemplate = () => `
             }
             
             outputImages.push(canvas.toDataURL('image/jpeg'));
+            
+            pageEl.style.overflowY = 'auto';
+            pageEl.style.border = '1px solid var(--elevation-background)';
         }
+
 
         function generatePDF(images) {
             if (!images || images.length === 0) return;
@@ -320,7 +324,6 @@ export const getHtmlTemplate = () => `
                     }
                 }
                 
-                // Use Blob -> FileReader for more robust Base64 generation
                 const blob = doc.output('blob');
                 const reader = new FileReader();
                 reader.readAsDataURL(blob);
@@ -343,27 +346,75 @@ export const getHtmlTemplate = () => `
                     type: 'ERROR',
                     data: 'PDF Generation failed: ' + error.message
                 }));
+                
             }
         }
 
         async function extractTextFromPDF(base64Data) {
             try {
-                // Remove header if present
+
+                
+                if (typeof pdfjsLib === 'undefined') {
+                    throw new Error('pdfjsLib is not defined. Script might not have loaded.');
+                }
+
                 const cleanData = base64Data.replace(/^data:application\\/pdf;base64,/, "");
+
+                
                 const pdfData = atob(cleanData);
+
                 
                 const loadingTask = pdfjsLib.getDocument({data: pdfData});
                 const pdf = await loadingTask.promise;
+
                 
                 let fullText = '';
                 
                 for (let i = 1; i <= pdf.numPages; i++) {
+
                     const page = await pdf.getPage(i);
                     const textContent = await page.getTextContent();
-                    const pageText = textContent.items.map(item => item.str).join(' ');
+                    
+                    const items = textContent.items.map(item => ({
+                        str: item.str,
+                        x: item.transform[4],
+                        y: item.transform[5],
+                        height: item.height || 0
+                    }));
+
+                    items.sort((a, b) => {
+                        if (Math.abs(a.y - b.y) > 5) {
+                            return b.y - a.y; 
+                        }
+                        return a.x - b.x;
+                    });
+
+                    let pageText = '';
+                    let lastY = -1;
+                    
+                    for (let j = 0; j < items.length; j++) {
+                        const item = items[j];
+                        if (lastY !== -1) {
+                            const diff = Math.abs(item.y - lastY);
+                            if (diff > 20) {
+                                pageText += '\\n\\n';
+                            } else if (diff > 8) {
+                                pageText += '\\n';
+                            } else if (pageText.length > 0 && !pageText.endsWith('\\n')) {
+                                pageText += ' ';
+                            }
+                        } else {
+                             // First item
+                        }
+                        pageText += item.str;
+                        lastY = item.y;
+                    }
+                    
                     fullText += pageText + '\\n\\n';
                 }
                 
+
+
                 window.ReactNativeWebView.postMessage(JSON.stringify({
                     type: 'PDF_TEXT_EXTRACTED',
                     data: fullText
@@ -384,10 +435,12 @@ export const getHtmlTemplate = () => `
         function handleMessage(event) {
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'GENERATE') {
-                    generateImages(data.text, data.config);
+                if (data.type === 'UPDATE_PREVIEW') {
+                    updatePreview(data.text, data.config);
+                } else if (data.type === 'GENERATE_IMAGE') {
+                    generateImage(data.text, data.config);
                 } else if (data.type === 'GENERATE_PDF') {
-                    generatePDF(window.storedOutputImages || []);
+                    generatePDF(data.images || window.storedOutputImages || []);
                 } else if (data.type === 'EXTRACT_TEXT_FROM_PDF') {
                     extractTextFromPDF(data.data);
                 }

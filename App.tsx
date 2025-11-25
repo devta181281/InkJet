@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import HomeScreen from './src/screens/HomeScreen';
 import OutputScreen from './src/screens/OutputScreen';
+import StylingScreen from './src/screens/StylingScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -18,6 +19,7 @@ function App() {
           }}
         >
           <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen name="Styling" component={StylingScreen} />
           <Stack.Screen name="Output" component={OutputScreen} />
         </Stack.Navigator>
       </NavigationContainer>
