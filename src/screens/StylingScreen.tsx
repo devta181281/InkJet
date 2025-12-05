@@ -7,17 +7,33 @@ import {
     ScrollView,
     StatusBar,
     Dimensions,
+    Animated,
+    PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import HandwritingGenerator, { HandwritingGeneratorRef, GenerationConfig } from '../components/HandwritingGenerator';
+import { useTheme } from '../context/ThemeContext';
+import type { RootStackParamList } from '../types/navigation';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+
+// Constants for Bottom Sheet
+const HEADER_HEIGHT = 80;
+const COLLAPSED_HEIGHT = 200;
+const EXPANDED_HEIGHT = height * 0.55;
+const DRAG_THRESHOLD = 50;
 
 const FONTS = [
-    { label: 'Homemade Apple', value: "'Homemade Apple', cursive", preview: 'Abc' },
-    { label: 'Caveat', value: "'Caveat', cursive", preview: 'Abc' },
-    { label: 'Liu Jian Mao Cao', value: "'Liu Jian Mao Cao', cursive", preview: 'Abc' },
+    { label: 'Homemade Apple', value: "'Homemade Apple', cursive" },
+    { label: 'Caveat', value: "'Caveat', cursive" },
+    { label: 'Liu Jian Mao Cao', value: "'Liu Jian Mao Cao', cursive" },
+    { label: 'Indie Flower', value: "'Indie Flower', cursive" },
+    { label: 'Dancing Script', value: "'Dancing Script', cursive" },
+    { label: 'Shadows Into Light', value: "'Shadows Into Light', cursive" },
+    { label: 'Patrick Hand', value: "'Patrick Hand', cursive" },
+    { label: 'Kalam', value: "'Kalam', cursive" },
 ];
 
 const COLORS = [
@@ -32,37 +48,67 @@ const EFFECTS = [
     { label: 'None', value: 'no-effect' },
 ];
 
+type StylingScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Styling'>;
+type StylingScreenRouteProp = RouteProp<RootStackParamList, 'Styling'>;
+
 export default function StylingScreen() {
-    const navigation = useNavigation();
-    const route = useRoute();
-    const { text } = route.params as { text: string };
+    const navigation = useNavigation<StylingScreenNavigationProp>();
+    const route = useRoute<StylingScreenRouteProp>();
+    const { text } = route.params;
+    const { colors, isDarkMode } = useTheme();
 
     const generatorRef = useRef<HandwritingGeneratorRef>(null);
-    const [selectedFont, setSelectedFont] = useState(FONTS[0].value);
-    const [selectedColor, setSelectedColor] = useState(COLORS[0].value);
-    const [selectedEffect, setSelectedEffect] = useState(EFFECTS[0].value);
 
-    // New Options
-    const [fontSize, setFontSize] = useState('10');
-    const [resolution, setResolution] = useState(2);
-    const [topPadding, setTopPadding] = useState('5');
-    const [wordSpacing, setWordSpacing] = useState('0');
-    const [letterSpacing, setLetterSpacing] = useState('0');
+    // Consolidated Config State
+    const [config, setConfig] = useState<GenerationConfig>({
+        font: FONTS[0].value,
+        inkColor: COLORS[0].value,
+        effect: EFFECTS[0].value as GenerationConfig['effect'],
+        fontSize: 10,
+        letterSpacing: 0,
+        wordSpacing: 0,
+        paperLines: true,
+        paperMargin: true,
+        resolution: 2,
+        topPadding: 5,
+        pageSize: 'a4',
+    });
+
+    // Animation State
+    const [isExpanded, setIsExpanded] = useState(false);
+    const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
+
+    const panResponderSimple = useRef(
+        PanResponder.create({
+            onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 5,
+            onPanResponderMove: (_, gestureState) => {
+                const newHeight = (isExpanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT) - gestureState.dy;
+                if (newHeight >= COLLAPSED_HEIGHT && newHeight <= EXPANDED_HEIGHT) {
+                    sheetHeight.setValue(newHeight);
+                }
+            },
+            onPanResponderRelease: (_, gestureState) => {
+                const currentHeight = (isExpanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT) - gestureState.dy;
+                if (currentHeight > (EXPANDED_HEIGHT + COLLAPSED_HEIGHT) / 2) {
+                    Animated.spring(sheetHeight, {
+                        toValue: EXPANDED_HEIGHT,
+                        useNativeDriver: false,
+                    }).start(() => setIsExpanded(true));
+                } else {
+                    Animated.spring(sheetHeight, {
+                        toValue: COLLAPSED_HEIGHT,
+                        useNativeDriver: false,
+                    }).start(() => setIsExpanded(false));
+                }
+            },
+        })
+    ).current;
+
+    const updateConfig = (key: keyof GenerationConfig, value: GenerationConfig[keyof GenerationConfig]) => {
+        setConfig(prev => ({ ...prev, [key]: value }));
+    };
 
     const handleGenerateImage = () => {
-        const config: GenerationConfig = {
-            font: selectedFont,
-            inkColor: selectedColor,
-            effect: selectedEffect,
-            paperLines: true,
-            paperMargin: true,
-            fontSize: parseFloat(fontSize) || 10,
-            resolution: resolution,
-            topPadding: parseFloat(topPadding) || 5,
-            wordSpacing: parseFloat(wordSpacing) || 0,
-            letterSpacing: parseFloat(letterSpacing) || 0,
-            pageSize: 'a4',
-        };
         generatorRef.current?.generateImage(text, config);
     };
 
@@ -72,52 +118,111 @@ export default function StylingScreen() {
 
     useEffect(() => {
         const timer = setTimeout(() => {
-            const config: GenerationConfig = {
-                font: selectedFont,
-                inkColor: selectedColor,
-                effect: selectedEffect,
-                paperLines: true,
-                paperMargin: true,
-                fontSize: parseFloat(fontSize) || 10,
-                resolution: resolution,
-                topPadding: parseFloat(topPadding) || 5,
-                wordSpacing: parseFloat(wordSpacing) || 0,
-                letterSpacing: parseFloat(letterSpacing) || 0,
-                pageSize: 'a4',
-            };
             generatorRef.current?.updatePreview(text, config);
         }, 500);
 
         return () => clearTimeout(timer);
-    }, [text, selectedFont, selectedColor, selectedEffect, fontSize, resolution, topPadding, wordSpacing, letterSpacing]);
+    }, [text, config]);
+
+    interface ControlRowProps {
+        label: string;
+        value: number;
+        onUpdate: (val: number) => void;
+        min: number;
+        max: number;
+        step: number;
+        suffix?: string;
+    }
+
+    const ControlRow = ({ label, value, onUpdate, min, max, step, suffix = '' }: ControlRowProps) => (
+        <View style={styles.controlRow}>
+            <Text style={[styles.controlLabel, { color: colors.textSecondary }]}>{label}</Text>
+            <View style={styles.stepperContainer}>
+                <TouchableOpacity
+                    style={[styles.stepperButton, { backgroundColor: colors.surfaceHighlight }]}
+                    onPress={() => onUpdate(Math.max(min, Number((value - step).toFixed(1))))}
+                >
+                    <Text style={[styles.stepperButtonText, { color: colors.text }]}>-</Text>
+                </TouchableOpacity>
+
+                <Text style={[styles.valueText, { color: colors.text }]}>{value}{suffix}</Text>
+
+                <TouchableOpacity
+                    style={[styles.stepperButton, { backgroundColor: colors.surfaceHighlight }]}
+                    onPress={() => onUpdate(Math.min(max, Number((value + step).toFixed(1))))}
+                >
+                    <Text style={[styles.stepperButtonText, { color: colors.text }]}>+</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+    );
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+            <StatusBar
+                barStyle={isDarkMode ? "light-content" : "dark-content"}
+                backgroundColor={colors.background}
+            />
+
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                    <Text style={[styles.backButtonText, { color: colors.text }]}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>Preview</Text>
+                <View style={{ width: 60 }} />
+            </View>
 
             <View style={styles.previewContainer}>
                 <HandwritingGenerator
                     ref={generatorRef}
                     onImagesGenerated={handleImagesGenerated}
+                    onError={(error, code) => {
+                        if (__DEV__) console.error('Generation error:', error, code);
+                    }}
                     style={styles.preview}
                 />
             </View>
 
-            <View style={styles.controlsContainer}>
+            <Animated.View
+                style={[
+                    styles.bottomSheet,
+                    {
+                        height: sheetHeight,
+                        backgroundColor: colors.surface,
+                        shadowColor: colors.shadow,
+                    }
+                ]}
+            >
+                <View {...panResponderSimple.panHandlers} style={styles.dragHandleContainer}>
+                    <View style={[styles.dragHandle, { backgroundColor: colors.border }]} />
+                    <Text style={[styles.dragLabel, { color: colors.textSecondary }]}>
+                        {isExpanded ? 'Swipe down to preview' : 'Swipe up to edit style'}
+                    </Text>
+                </View>
+
                 <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
                     {/* Fonts */}
                     <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Font Style</Text>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Font Style</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
                             {FONTS.map((font) => (
                                 <TouchableOpacity
                                     key={font.value}
-                                    style={[styles.fontCard, selectedFont === font.value && styles.selectedCard]}
-                                    onPress={() => setSelectedFont(font.value)}
+                                    style={[
+                                        styles.fontCard,
+                                        {
+                                            backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.background,
+                                            borderColor: config.font === font.value ? colors.primary : colors.border,
+                                            borderWidth: config.font === font.value ? 2 : 1,
+                                        }
+                                    ]}
+                                    onPress={() => updateConfig('font', font.value)}
                                 >
-                                    <Text style={[styles.fontPreview, { fontFamily: 'System' }]}>Aa</Text>
-                                    <Text style={[styles.fontLabel, selectedFont === font.value && styles.selectedText]}>
+                                    <Text style={[
+                                        styles.fontLabel,
+                                        { color: config.font === font.value ? colors.text : colors.textSecondary }
+                                    ]}>
                                         {font.label}
                                     </Text>
                                 </TouchableOpacity>
@@ -125,9 +230,39 @@ export default function StylingScreen() {
                         </ScrollView>
                     </View>
 
+                    {/* Text Adjustments */}
+                    <View style={styles.section}>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Text Adjustments</Text>
+                        <View style={[styles.controlsCard, { backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.background }]}>
+                            <ControlRow
+                                label="Font Size"
+                                value={config.fontSize ?? 10}
+                                onUpdate={(val: number) => updateConfig('fontSize', val)}
+                                min={10} max={40} step={1}
+                                suffix="px"
+                            />
+                            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                            <ControlRow
+                                label="Letter Spacing"
+                                value={config.letterSpacing ?? 0}
+                                onUpdate={(val: number) => updateConfig('letterSpacing', val)}
+                                min={-5} max={10} step={0.5}
+                                suffix="px"
+                            />
+                            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                            <ControlRow
+                                label="Word Spacing"
+                                value={config.wordSpacing ?? 0}
+                                onUpdate={(val: number) => updateConfig('wordSpacing', val)}
+                                min={-5} max={20} step={1}
+                                suffix="px"
+                            />
+                        </View>
+                    </View>
+
                     {/* Colors */}
                     <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Ink Color</Text>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Ink Color</Text>
                         <View style={styles.colorRow}>
                             {COLORS.map((color) => (
                                 <TouchableOpacity
@@ -135,9 +270,12 @@ export default function StylingScreen() {
                                     style={[
                                         styles.colorSwatch,
                                         { backgroundColor: color.hex },
-                                        selectedColor === color.value && styles.selectedColorSwatch
+                                        config.inkColor === color.value && {
+                                            borderColor: colors.text,
+                                            transform: [{ scale: 1.15 }]
+                                        }
                                     ]}
-                                    onPress={() => setSelectedColor(color.value)}
+                                    onPress={() => updateConfig('inkColor', color.value)}
                                 />
                             ))}
                         </View>
@@ -145,15 +283,24 @@ export default function StylingScreen() {
 
                     {/* Effects */}
                     <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Paper Effect</Text>
-                        <View style={styles.effectRow}>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Paper Effect</Text>
+                        <View style={[styles.effectRow, { backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.surfaceHighlight }]}>
                             {EFFECTS.map((effect) => (
                                 <TouchableOpacity
                                     key={effect.value}
-                                    style={[styles.effectButton, selectedEffect === effect.value && styles.selectedEffectButton]}
-                                    onPress={() => setSelectedEffect(effect.value)}
+                                    style={[
+                                        styles.effectButton,
+                                        config.effect === effect.value && {
+                                            backgroundColor: colors.card,
+                                            shadowColor: colors.shadow,
+                                        }
+                                    ]}
+                                    onPress={() => updateConfig('effect', effect.value)}
                                 >
-                                    <Text style={[styles.effectLabel, selectedEffect === effect.value && styles.selectedEffectLabel]}>
+                                    <Text style={[
+                                        styles.effectLabel,
+                                        { color: config.effect === effect.value ? colors.text : colors.textSecondary }
+                                    ]}>
                                         {effect.label}
                                     </Text>
                                 </TouchableOpacity>
@@ -161,14 +308,18 @@ export default function StylingScreen() {
                         </View>
                     </View>
 
+                    <View style={{ height: 80 }} />
                 </ScrollView>
 
-                <View style={styles.footer}>
-                    <TouchableOpacity style={styles.generateButton} onPress={handleGenerateImage}>
-                        <Text style={styles.generateButtonText}>Generate Handwriting</Text>
+                <View style={[styles.footer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+                    <TouchableOpacity
+                        style={[styles.generateButton, { backgroundColor: colors.primary }]}
+                        onPress={handleGenerateImage}
+                    >
+                        <Text style={[styles.generateButtonText, { color: colors.onPrimary }]}>Generate Handwriting</Text>
                     </TouchableOpacity>
                 </View>
-            </View>
+            </Animated.View>
         </SafeAreaView>
     );
 }
@@ -176,119 +327,163 @@ export default function StylingScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        zIndex: 1,
+    },
+    backButton: {
+        padding: 8,
+    },
+    backButtonText: {
+        fontSize: 16,
+        fontWeight: '600',
+    },
+    headerTitle: {
+        fontSize: 18,
+        fontWeight: '700',
     },
     previewContainer: {
-        height: '45%',
-        backgroundColor: '#e0e0e0',
-        overflow: 'hidden',
-        borderBottomWidth: 1,
-        borderBottomColor: '#ddd',
+        flex: 1,
+        marginBottom: COLLAPSED_HEIGHT,
     },
     preview: {
         flex: 1,
     },
-    controlsContainer: {
-        flex: 1,
-        backgroundColor: '#ffffff',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        marginTop: -20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: -2 },
+    bottomSheet: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
+        shadowOffset: { width: 0, height: -4 },
         shadowOpacity: 0.1,
-        shadowRadius: 10,
-        elevation: 5,
+        shadowRadius: 16,
+        elevation: 20,
+        zIndex: 100,
+        overflow: 'hidden',
+    },
+    dragHandleContainer: {
+        alignItems: 'center',
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(0,0,0,0.05)',
+    },
+    dragHandle: {
+        width: 40,
+        height: 5,
+        borderRadius: 3,
+        marginBottom: 8,
+    },
+    dragLabel: {
+        fontSize: 12,
+        fontWeight: '500',
     },
     scrollContent: {
         padding: 24,
-        paddingBottom: 100,
     },
     section: {
         marginBottom: 32,
     },
     sectionTitle: {
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '700',
-        color: '#999',
         marginBottom: 16,
         textTransform: 'uppercase',
-        letterSpacing: 1,
+        letterSpacing: 1.2,
     },
     horizontalList: {
         paddingRight: 20,
     },
     fontCard: {
-        width: 100,
-        height: 80,
-        backgroundColor: '#f8f9fa',
-        borderRadius: 12,
+        width: 110,
+        height: 90,
+        borderRadius: 16,
         marginRight: 12,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
-        borderColor: 'transparent',
+        borderWidth: 1,
     },
-    selectedCard: {
-        borderColor: '#1a1a1a',
-        backgroundColor: '#fff',
-    },
-    fontPreview: {
-        fontSize: 24,
-        marginBottom: 4,
-        color: '#333',
+    fontIcon: {
+        fontSize: 32,
+        marginBottom: 6,
     },
     fontLabel: {
-        fontSize: 12,
-        color: '#666',
+        fontSize: 11,
+        fontWeight: '500',
         textAlign: 'center',
     },
-    selectedText: {
-        color: '#1a1a1a',
+    controlsCard: {
+        borderRadius: 16,
+        padding: 16,
+    },
+    controlRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 8,
+    },
+    controlLabel: {
+        fontSize: 14,
+        fontWeight: '500',
+    },
+    stepperContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    stepperButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    stepperButtonText: {
+        fontSize: 18,
         fontWeight: '600',
+        lineHeight: 22,
+    },
+    valueText: {
+        fontSize: 14,
+        fontWeight: '600',
+        width: 60,
+        textAlign: 'center',
+    },
+    divider: {
+        height: 1,
+        marginVertical: 8,
+        opacity: 0.5,
     },
     colorRow: {
         flexDirection: 'row',
-        gap: 16,
+        gap: 20,
     },
     colorSwatch: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        borderWidth: 2,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        borderWidth: 3,
         borderColor: 'transparent',
-    },
-    selectedColorSwatch: {
-        borderColor: '#1a1a1a',
-        transform: [{ scale: 1.1 }],
     },
     effectRow: {
         flexDirection: 'row',
-        backgroundColor: '#f8f9fa',
-        borderRadius: 12,
+        borderRadius: 16,
         padding: 4,
     },
     effectButton: {
         flex: 1,
-        paddingVertical: 10,
+        paddingVertical: 12,
         alignItems: 'center',
-        borderRadius: 8,
-    },
-    selectedEffectButton: {
-        backgroundColor: '#fff',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 2,
+        borderRadius: 12,
     },
     effectLabel: {
         fontSize: 14,
-        color: '#666',
-        fontWeight: '500',
-    },
-    selectedEffectLabel: {
-        color: '#1a1a1a',
         fontWeight: '600',
     },
     footer: {
@@ -297,24 +492,20 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         padding: 24,
-        backgroundColor: '#ffffff',
         borderTopWidth: 1,
-        borderTopColor: '#f0f0f0',
     },
     generateButton: {
-        backgroundColor: '#1a1a1a',
         paddingVertical: 18,
-        borderRadius: 16,
+        borderRadius: 20,
         alignItems: 'center',
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 4,
+        shadowRadius: 12,
+        elevation: 6,
     },
     generateButtonText: {
-        color: '#fff',
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: '700',
         letterSpacing: 0.5,
     },

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
     View,
     Text,
@@ -8,24 +8,79 @@ import {
     StatusBar,
     Alert,
     ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
+    Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DocumentPicker from 'react-native-document-picker';
 import RNFS from 'react-native-fs';
 import HandwritingGenerator, { HandwritingGeneratorRef } from '../components/HandwritingGenerator';
+import { useTheme } from '../context/ThemeContext';
+import { theme } from '../utils/theme';
+import type { RootStackParamList } from '../types/navigation';
+
+const AnimatedSafeAreaView = Animated.createAnimatedComponent(SafeAreaView);
+const AnimatedView = Animated.createAnimatedComponent(View);
+
+type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
 export default function HomeScreen() {
-    const navigation = useNavigation();
+    const navigation = useNavigation<HomeScreenNavigationProp>();
+    const { colors, isDarkMode, setMode, mode } = useTheme();
+
+    // Animation Value: 0 for light, 1 for dark
+    const themeAnim = useRef(new Animated.Value(isDarkMode ? 1 : 0)).current;
+
+    useEffect(() => {
+        Animated.timing(themeAnim, {
+            toValue: isDarkMode ? 1 : 0,
+            duration: 350,
+            useNativeDriver: false, // Color interpolation doesn't support native driver
+        }).start();
+    }, [isDarkMode, themeAnim]);
+
+    const containerBg = themeAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [theme.light.background, theme.dark.background]
+    });
+
+    const cardBg = themeAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [theme.light.surface, theme.dark.surface]
+    });
+
+    const cardBorder = themeAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [theme.light.border, theme.dark.border]
+    });
+
     const generatorRef = useRef<HandwritingGeneratorRef>(null);
     const [text, setText] = useState('');
     const [isExtracting, setIsExtracting] = useState(false);
+    const [isGeneratorReady, setIsGeneratorReady] = useState(false);
 
     const handleNext = () => {
+        if (!isGeneratorReady) {
+            Alert.alert('Loading', 'Please wait for the generator to initialize...');
+            return;
+        }
         navigation.navigate('Styling', { text });
     };
 
+    const toggleTheme = () => {
+        const nextMode = mode === 'light' ? 'dark' : 'light';
+        setMode(nextMode);
+    };
+
     const handleImportPdf = async () => {
+        if (!isGeneratorReady) {
+            Alert.alert('Loading', 'Please wait for the generator to initialize...');
+            return;
+        }
+
         try {
             const res = await DocumentPicker.pick({
                 type: [DocumentPicker.types.pdf],
@@ -47,7 +102,7 @@ export default function HomeScreen() {
             if (DocumentPicker.isCancel(err)) {
                 // User cancelled
             } else {
-                Alert.alert('Error', 'Failed to pick PDF: ' + (err as any).message);
+                Alert.alert('Error', 'Failed to pick PDF: ' + (err as Error).message);
             }
             setIsExtracting(false);
         }
@@ -59,153 +114,210 @@ export default function HomeScreen() {
         Alert.alert('Success', 'Text extracted from PDF!');
     };
 
+    const handleGeneratorReady = () => {
+        setIsGeneratorReady(true);
+    };
+
+    const handleGeneratorError = (error: string, code?: string) => {
+        if (__DEV__) console.error('Generator error:', error, code);
+        setIsExtracting(false);
+        if (code === 'NO_INTERNET') {
+            // Alert already shown by HandwritingGenerator
+        }
+    };
+
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-            <View style={styles.content}>
-                <View style={styles.headerContainer}>
-                    <Text style={styles.headerTitle}>Inkjet</Text>
-                    <Text style={styles.headerSubtitle}>Turn your digital text into handwriting</Text>
+        <AnimatedSafeAreaView style={[styles.container, { backgroundColor: containerBg }]}>
+            <StatusBar
+                barStyle={isDarkMode ? "light-content" : "dark-content"}
+                backgroundColor="transparent"
+                translucent
+            />
+
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                style={styles.content}
+            >
+                <View style={styles.headerRow}>
+                    <View style={styles.headerContainer}>
+                        <Text style={[styles.headerTitle, { color: colors.text }]}>LazyAss</Text>
+                        <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
+                            Turn your digital text into handwriting
+                        </Text>
+                    </View>
+                    <TouchableOpacity
+                        onPress={toggleTheme}
+                        style={[styles.themeButton, { backgroundColor: colors.surfaceHighlight }]}
+                    >
+                        <Text style={{ fontSize: 20 }}>{isDarkMode ? '🌙' : '☀️'}</Text>
+                    </TouchableOpacity>
                 </View>
 
-                <View style={styles.inputCard}>
+                <AnimatedView style={[
+                    styles.inputCard,
+                    {
+                        backgroundColor: cardBg,
+                        borderColor: cardBorder,
+                        borderWidth: isDarkMode ? 1 : 0,
+                        shadowColor: colors.shadow,
+                    }
+                ]}>
                     <TextInput
-                        style={styles.textInput}
+                        style={[styles.textInput, { color: colors.text }]}
                         multiline
                         placeholder="Start typing or import a PDF..."
-                        placeholderTextColor="#999"
+                        placeholderTextColor={colors.textTertiary}
                         value={text}
                         onChangeText={setText}
                         textAlignVertical="top"
                     />
 
-                    <View style={styles.inputActions}>
+                    <View style={[styles.inputActions, { borderTopColor: colors.border }]}>
                         <TouchableOpacity
                             onPress={handleImportPdf}
-                            style={styles.iconButton}
-                            disabled={isExtracting}
+                            style={[
+                                styles.iconButton,
+                                {
+                                    backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.background,
+                                    borderColor: colors.border
+                                }
+                            ]}
+                            disabled={isExtracting || !isGeneratorReady}
                         >
                             {isExtracting ? (
-                                <ActivityIndicator size="small" color="#666" />
+                                <ActivityIndicator size="small" color={colors.textSecondary} />
                             ) : (
-                                <Text style={styles.iconButtonText}>📄 Import PDF</Text>
+                                <Text style={[styles.iconButtonText, { color: colors.text }]}>📄 Import PDF</Text>
                             )}
                         </TouchableOpacity>
-                        <Text style={styles.characterCount}>{text.length} chars</Text>
+                        <Text style={[styles.characterCount, { color: colors.textTertiary }]}>
+                            {text.length} chars
+                        </Text>
                     </View>
-                </View>
+                </AnimatedView>
 
-                <TouchableOpacity
-                    style={[styles.fab, !text.trim() && styles.fabDisabled]}
-                    onPress={handleNext}
-                    disabled={!text.trim()}
-                >
-                    <Text style={styles.fabText}>Next ➜</Text>
-                </TouchableOpacity>
-            </View>
+                <View style={styles.footer}>
+                    <TouchableOpacity
+                        style={[
+                            styles.nextButton,
+                            {
+                                backgroundColor: colors.primary,
+                                opacity: !text.trim() || !isGeneratorReady ? 0.5 : 1
+                            }
+                        ]}
+                        onPress={handleNext}
+                        disabled={!text.trim() || !isGeneratorReady}
+                    >
+                        {!isGeneratorReady ? (
+                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                        ) : (
+                            <Text style={[styles.nextButtonText, { color: colors.onPrimary }]}>Next</Text>
+                        )}
+                    </TouchableOpacity>
+                </View>
+            </KeyboardAvoidingView>
 
             <HandwritingGenerator
                 ref={generatorRef}
                 onImagesGenerated={() => { }}
                 onPdfTextExtracted={handlePdfTextExtracted}
+                onReady={handleGeneratorReady}
+                onError={handleGeneratorError}
                 style={styles.hiddenGenerator}
             />
-        </SafeAreaView>
+        </AnimatedSafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#ffffff',
     },
     content: {
         flex: 1,
-        padding: 24,
+        padding: 20,
+    },
+    headerRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginTop: 12,
+        marginBottom: 24,
     },
     headerContainer: {
-        marginTop: 20,
-        marginBottom: 40,
+        flex: 1,
     },
     headerTitle: {
         fontSize: 32,
         fontWeight: '700',
-        color: '#1a1a1a',
         letterSpacing: -0.5,
     },
     headerSubtitle: {
         fontSize: 16,
-        color: '#666',
-        marginTop: 8,
+        marginTop: 4,
+    },
+    themeButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     inputCard: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
-        borderRadius: 24,
-        padding: 20,
-        marginBottom: 100, // Space for FAB
+        borderRadius: 16,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 4,
+        overflow: 'hidden',
     },
     textInput: {
         flex: 1,
-        fontSize: 16,
-        color: '#333',
-        lineHeight: 24,
-        padding: 0,
+        padding: 20,
+        fontSize: 17,
+        lineHeight: 26,
     },
     inputActions: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginTop: 16,
-        paddingTop: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
         borderTopWidth: 1,
-        borderTopColor: '#eee',
     },
     iconButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 14,
         paddingVertical: 8,
-        paddingHorizontal: 12,
         borderRadius: 8,
-        backgroundColor: '#fff',
         borderWidth: 1,
-        borderColor: '#eee',
     },
     iconButtonText: {
         fontSize: 14,
-        fontWeight: '600',
-        color: '#444',
+        fontWeight: '500',
     },
     characterCount: {
-        fontSize: 12,
-        color: '#999',
+        fontSize: 13,
     },
-    fab: {
-        position: 'absolute',
-        bottom: 32,
-        right: 24,
-        backgroundColor: '#1a1a1a',
-        paddingVertical: 16,
-        paddingHorizontal: 32,
-        borderRadius: 32,
-        elevation: 4,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
+    footer: {
+        paddingTop: 16,
     },
-    fabDisabled: {
-        backgroundColor: '#ccc',
-        elevation: 0,
-        shadowOpacity: 0,
+    nextButton: {
+        height: 56,
+        borderRadius: 28,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    fabText: {
-        color: '#fff',
-        fontSize: 16,
+    nextButtonText: {
+        fontSize: 17,
         fontWeight: '600',
     },
     hiddenGenerator: {
         position: 'absolute',
-        width: 0,
-        height: 0,
+        width: 1,
+        height: 1,
         opacity: 0,
     },
 });
