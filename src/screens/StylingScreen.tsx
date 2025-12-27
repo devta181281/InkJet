@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
     Text,
@@ -9,21 +9,30 @@ import {
     Dimensions,
     Animated,
     PanResponder,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import RNFS from 'react-native-fs'; // Import RNFS
 import HandwritingGenerator, { HandwritingGeneratorRef, GenerationConfig } from '../components/HandwritingGenerator';
+import ControlRow from '../components/ControlRow';
 import { useTheme } from '../context/ThemeContext';
+import {
+    BOTTOM_SHEET_COLLAPSED_HEIGHT,
+    BOTTOM_SHEET_EXPANDED_RATIO,
+    BOTTOM_SHEET_DRAG_THRESHOLD,
+    MAX_TEXT_LENGTH,
+} from '../utils/constants';
 import type { RootStackParamList } from '../types/navigation';
 
 const { width, height } = Dimensions.get('window');
 
-// Constants for Bottom Sheet
-const HEADER_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 200;
-const EXPANDED_HEIGHT = height * 0.55;
-const DRAG_THRESHOLD = 50;
+// Bottom Sheet Layout (uses constants)
+const COLLAPSED_HEIGHT = BOTTOM_SHEET_COLLAPSED_HEIGHT;
+const EXPANDED_HEIGHT = height * BOTTOM_SHEET_EXPANDED_RATIO;
+const DRAG_THRESHOLD = BOTTOM_SHEET_DRAG_THRESHOLD;
 
 const FONTS = [
     { label: 'Homemade Apple', value: "'Homemade Apple', cursive" },
@@ -48,6 +57,19 @@ const EFFECTS = [
     { label: 'None', value: 'no-effect' },
 ];
 
+const QUALITY_OPTIONS = [
+    { label: 'Low', value: 'low', description: 'Good quality, smaller files' },
+    { label: 'Medium', value: 'medium', description: 'High quality, balanced' },
+    { label: 'High', value: 'high', description: 'Maximum quality' },
+];
+
+const MISTAKES_OPTIONS = [
+    { label: 'Off', value: 0 },
+    { label: 'Few', value: 3 },
+    { label: 'Some', value: 5 },
+    { label: 'Many', value: 10 },
+];
+
 type StylingScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Styling'>;
 type StylingScreenRouteProp = RouteProp<RootStackParamList, 'Styling'>;
 
@@ -69,35 +91,69 @@ export default function StylingScreen() {
         wordSpacing: 0,
         paperLines: true,
         paperMargin: true,
-        resolution: 2,
         topPadding: 5,
         pageSize: 'a4',
+        quality: text.length > MAX_TEXT_LENGTH ? 'low' : 'medium',
+        spellingMistakes: 0,
     });
+
+    // Notify user if quality was downgraded
+    useEffect(() => {
+        if (text.length > MAX_TEXT_LENGTH) {
+            // Short delay to ensure it appears after transition
+            setTimeout(() => {
+                Alert.alert(
+                    'Performance Mode',
+                    'Quality has been set to "Low" to improve stability with this large amount of text.',
+                    [{ text: 'OK' }]
+                );
+            }, 500);
+        }
+    }, []);
 
     // Animation State
     const [isExpanded, setIsExpanded] = useState(false);
+    const [isGenerating, setIsGenerating] = useState(false);
     const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
+
+    // Generation timeout
+    const generationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const GENERATION_TIMEOUT_MS = 30000; // 30 seconds
+
+    // Use ref to avoid stale closure in PanResponder
+    const isExpandedRef = useRef(isExpanded);
+    useEffect(() => {
+        isExpandedRef.current = isExpanded;
+    }, [isExpanded]);
 
     const panResponderSimple = useRef(
         PanResponder.create({
             onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 5,
             onPanResponderMove: (_, gestureState) => {
-                const newHeight = (isExpanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT) - gestureState.dy;
+                const baseHeight = isExpandedRef.current ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT;
+                const newHeight = baseHeight - gestureState.dy;
                 if (newHeight >= COLLAPSED_HEIGHT && newHeight <= EXPANDED_HEIGHT) {
                     sheetHeight.setValue(newHeight);
                 }
             },
             onPanResponderRelease: (_, gestureState) => {
-                const currentHeight = (isExpanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT) - gestureState.dy;
+                const baseHeight = isExpandedRef.current ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT;
+                const currentHeight = baseHeight - gestureState.dy;
                 if (currentHeight > (EXPANDED_HEIGHT + COLLAPSED_HEIGHT) / 2) {
+                    // Note: useNativeDriver: false is required for height/layout animations
+                    // Using higher friction for smoother, less bouncy feel on low-end devices
                     Animated.spring(sheetHeight, {
                         toValue: EXPANDED_HEIGHT,
                         useNativeDriver: false,
+                        friction: 8,
+                        tension: 65,
                     }).start(() => setIsExpanded(true));
                 } else {
                     Animated.spring(sheetHeight, {
                         toValue: COLLAPSED_HEIGHT,
                         useNativeDriver: false,
+                        friction: 8,
+                        tension: 65,
                     }).start(() => setIsExpanded(false));
                 }
             },
@@ -109,11 +165,88 @@ export default function StylingScreen() {
     };
 
     const handleGenerateImage = () => {
+        // Prevent spam-clicking
+        if (isGenerating) {
+            return;
+        }
+        if (!text || !text.trim()) {
+            Alert.alert(
+                'No Text',
+                'Please enter some text before generating handwriting.',
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+        setIsGenerating(true);
+
+        // Set timeout for generation - 30 seconds
+        const startTimeout = () => {
+            generationTimeoutRef.current = setTimeout(() => {
+                Alert.alert(
+                    'Generation Taking Long',
+                    'The generation process is still running in the background. Large documents may take some time.',
+                    [
+                        {
+                            text: 'Stop',
+                            style: 'destructive',
+                            onPress: () => setIsGenerating(false)
+                        },
+                        {
+                            text: 'Wait',
+                            onPress: () => startTimeout()
+                        }
+                    ]
+                );
+            }, GENERATION_TIMEOUT_MS);
+        };
+
+        startTimeout();
+
         generatorRef.current?.generateImage(text, config);
     };
 
-    const handleImagesGenerated = (images: string[]) => {
-        navigation.navigate('Output', { images });
+    const handleImagesGenerated = async (images: string[]) => {
+        // Clear timeout
+        if (generationTimeoutRef.current) {
+            clearTimeout(generationTimeoutRef.current);
+            generationTimeoutRef.current = null;
+        }
+
+        if (!images || images.length === 0) {
+            setIsGenerating(false);
+            Alert.alert(
+                'Generation Failed',
+                'No images were generated. Please try again.',
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+
+        try {
+            // CRITICAL FIX: Save images to cache and pass URIs to prevent TransactionTooLargeException
+            const savedImagePaths: string[] = [];
+
+            for (let i = 0; i < images.length; i++) {
+                const base64Data = images[i].replace(/^data:image\/[a-z]+;base64,/, "");
+                const fileName = `generated_${Date.now()}_${i}.jpg`;
+                const filePath = `file://${RNFS.CachesDirectoryPath}/${fileName}`;
+
+                await RNFS.writeFile(filePath.replace('file://', ''), base64Data, 'base64');
+                savedImagePaths.push(filePath);
+            }
+
+            setIsGenerating(false);
+            navigation.navigate('Output', { images: savedImagePaths });
+
+        } catch (error) {
+            setIsGenerating(false);
+            if (__DEV__) console.error('Failed to save cache images:', error);
+            Alert.alert(
+                'Error',
+                'Failed to process generated images. Please ensure you have enough storage space.',
+                [{ text: 'OK' }]
+            );
+        }
     };
 
     useEffect(() => {
@@ -124,38 +257,26 @@ export default function StylingScreen() {
         return () => clearTimeout(timer);
     }, [text, config]);
 
-    interface ControlRowProps {
-        label: string;
-        value: number;
-        onUpdate: (val: number) => void;
-        min: number;
-        max: number;
-        step: number;
-        suffix?: string;
-    }
+    // Cleanup timeouts on unmount
+    useEffect(() => {
+        return () => {
+            if (generationTimeoutRef.current) {
+                clearTimeout(generationTimeoutRef.current);
+            }
+        };
+    }, []);
 
-    const ControlRow = ({ label, value, onUpdate, min, max, step, suffix = '' }: ControlRowProps) => (
-        <View style={styles.controlRow}>
-            <Text style={[styles.controlLabel, { color: colors.textSecondary }]}>{label}</Text>
-            <View style={styles.stepperContainer}>
-                <TouchableOpacity
-                    style={[styles.stepperButton, { backgroundColor: colors.surfaceHighlight }]}
-                    onPress={() => onUpdate(Math.max(min, Number((value - step).toFixed(1))))}
-                >
-                    <Text style={[styles.stepperButtonText, { color: colors.text }]}>-</Text>
-                </TouchableOpacity>
+    // Memoize colors for ControlRow to prevent unnecessary re-renders
+    const controlRowColors = useMemo(() => ({
+        text: colors.text,
+        textSecondary: colors.textSecondary,
+        surfaceHighlight: colors.surfaceHighlight,
+    }), [colors.text, colors.textSecondary, colors.surfaceHighlight]);
 
-                <Text style={[styles.valueText, { color: colors.text }]}>{value}{suffix}</Text>
-
-                <TouchableOpacity
-                    style={[styles.stepperButton, { backgroundColor: colors.surfaceHighlight }]}
-                    onPress={() => onUpdate(Math.min(max, Number((value + step).toFixed(1))))}
-                >
-                    <Text style={[styles.stepperButtonText, { color: colors.text }]}>+</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
+    // Memoized update handlers to prevent recreation on each render
+    const handleFontSizeUpdate = useCallback((val: number) => updateConfig('fontSize', val), []);
+    const handleLetterSpacingUpdate = useCallback((val: number) => updateConfig('letterSpacing', val), []);
+    const handleWordSpacingUpdate = useCallback((val: number) => updateConfig('wordSpacing', val), []);
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
@@ -165,7 +286,7 @@ export default function StylingScreen() {
             />
 
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} accessibilityLabel="Go back" accessibilityRole="button">
                     <Text style={[styles.backButtonText, { color: colors.text }]}>← Back</Text>
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>Preview</Text>
@@ -177,7 +298,25 @@ export default function StylingScreen() {
                     ref={generatorRef}
                     onImagesGenerated={handleImagesGenerated}
                     onError={(error, code) => {
+                        // Clear timeout
+                        if (generationTimeoutRef.current) {
+                            clearTimeout(generationTimeoutRef.current);
+                            generationTimeoutRef.current = null;
+                        }
+                        setIsGenerating(false);
                         if (__DEV__) console.error('Generation error:', error, code);
+
+                        // Show user-friendly error for specific cases
+                        if (code === 'WEBVIEW_CRASH') {
+                            // Alert handled by HandwritingGenerator
+                            return;
+                        }
+
+                        Alert.alert(
+                            'Generation Failed',
+                            'Failed to generate handwriting. Please try again.',
+                            [{ text: 'OK' }]
+                        );
                     }}
                     style={styles.preview}
                 />
@@ -237,25 +376,28 @@ export default function StylingScreen() {
                             <ControlRow
                                 label="Font Size"
                                 value={config.fontSize ?? 10}
-                                onUpdate={(val: number) => updateConfig('fontSize', val)}
+                                onUpdate={handleFontSizeUpdate}
                                 min={10} max={40} step={1}
                                 suffix="px"
+                                colors={controlRowColors}
                             />
                             <View style={[styles.divider, { backgroundColor: colors.border }]} />
                             <ControlRow
                                 label="Letter Spacing"
                                 value={config.letterSpacing ?? 0}
-                                onUpdate={(val: number) => updateConfig('letterSpacing', val)}
+                                onUpdate={handleLetterSpacingUpdate}
                                 min={-5} max={10} step={0.5}
                                 suffix="px"
+                                colors={controlRowColors}
                             />
                             <View style={[styles.divider, { backgroundColor: colors.border }]} />
                             <ControlRow
                                 label="Word Spacing"
                                 value={config.wordSpacing ?? 0}
-                                onUpdate={(val: number) => updateConfig('wordSpacing', val)}
+                                onUpdate={handleWordSpacingUpdate}
                                 min={-5} max={20} step={1}
                                 suffix="px"
+                                colors={controlRowColors}
                             />
                         </View>
                     </View>
@@ -308,15 +450,86 @@ export default function StylingScreen() {
                         </View>
                     </View>
 
+                    {/* Quality */}
+                    <View style={styles.section}>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Output Quality</Text>
+                        <View style={[styles.effectRow, { backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.surfaceHighlight }]}>
+                            {QUALITY_OPTIONS.map((quality) => (
+                                <TouchableOpacity
+                                    key={quality.value}
+                                    style={[
+                                        styles.effectButton,
+                                        config.quality === quality.value && {
+                                            backgroundColor: colors.card,
+                                            shadowColor: colors.shadow,
+                                        }
+                                    ]}
+                                    onPress={() => updateConfig('quality', quality.value)}
+                                >
+                                    <Text style={[
+                                        styles.effectLabel,
+                                        { color: config.quality === quality.value ? colors.text : colors.textSecondary }
+                                    ]}>
+                                        {quality.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+
+                    {/* Spelling Mistakes */}
+                    <View style={styles.section}>
+                        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Spelling Mistakes</Text>
+                        <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>Cross out words like real handwriting</Text>
+                        <View style={[styles.effectRow, { backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.surfaceHighlight }]}>
+                            {MISTAKES_OPTIONS.map((option) => (
+                                <TouchableOpacity
+                                    key={option.value}
+                                    style={[
+                                        styles.effectButton,
+                                        config.spellingMistakes === option.value && {
+                                            backgroundColor: colors.card,
+                                            shadowColor: colors.shadow,
+                                        }
+                                    ]}
+                                    onPress={() => updateConfig('spellingMistakes', option.value)}
+                                >
+                                    <Text style={[
+                                        styles.effectLabel,
+                                        { color: config.spellingMistakes === option.value ? colors.text : colors.textSecondary }
+                                    ]}>
+                                        {option.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+
                     <View style={{ height: 80 }} />
                 </ScrollView>
 
                 <View style={[styles.footer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
                     <TouchableOpacity
-                        style={[styles.generateButton, { backgroundColor: colors.primary }]}
+                        style={[
+                            styles.generateButton,
+                            {
+                                backgroundColor: colors.primary,
+                                opacity: isGenerating ? 0.7 : 1
+                            }
+                        ]}
                         onPress={handleGenerateImage}
+                        disabled={isGenerating}
+                        accessibilityLabel={isGenerating ? 'Generating handwriting' : 'Generate handwriting'}
+                        accessibilityState={{ disabled: isGenerating }}
                     >
-                        <Text style={[styles.generateButtonText, { color: colors.onPrimary }]}>Generate Handwriting</Text>
+                        {isGenerating ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <ActivityIndicator size="small" color={colors.onPrimary} />
+                                <Text style={[styles.generateButtonText, { color: colors.onPrimary, marginLeft: 8 }]}>Generating...</Text>
+                            </View>
+                        ) : (
+                            <Text style={[styles.generateButtonText, { color: colors.onPrimary }]}>Generate Handwriting</Text>
+                        )}
                     </TouchableOpacity>
                 </View>
             </Animated.View>
@@ -393,9 +606,14 @@ const styles = StyleSheet.create({
     sectionTitle: {
         fontSize: 13,
         fontWeight: '700',
-        marginBottom: 16,
+        marginBottom: 4,
         textTransform: 'uppercase',
         letterSpacing: 1.2,
+    },
+    sectionHint: {
+        fontSize: 12,
+        marginBottom: 12,
+        opacity: 0.7,
     },
     horizontalList: {
         paddingRight: 20,

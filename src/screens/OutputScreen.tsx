@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
     View,
     Text,
@@ -18,46 +18,46 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
-import { WebView } from 'react-native-webview';
-import { getHtmlTemplate } from '../utils/htmlTemplate';
+import { usePdfOperations } from '../context/WebViewContext';
 import { useTheme } from '../context/ThemeContext';
-
 
 const { width } = Dimensions.get('window');
 
 export default function OutputScreen() {
     const route = useRoute();
     const navigation = useNavigation();
-    const { images } = route.params as { images: string[] };
+
+    // Validate route params - Expecting FILE URIs now, not base64
+    const rawParams = route.params as { images?: unknown } | undefined;
+    const imagePaths: string[] = Array.isArray(rawParams?.images)
+        ? rawParams.images.filter((img): img is string => typeof img === 'string')
+        : [];
 
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-    const webViewRef = useRef<WebView>(null);
-
     const { colors, isDarkMode } = useTheme();
 
-    const saveToCache = async (base64Data: string, index: number) => {
-        const fileName = `handwriting_${Date.now()}_${index}.jpg`;
-        const path = `${RNFS.CachesDirectoryPath}/${fileName}`;
-        const data = base64Data.replace(/^data:image\/[a-z]+;base64,/, "");
-        await RNFS.writeFile(path, data, 'base64');
-        return path;
-    };
-
-    const handleShare = async (base64Data: string, index: number) => {
+    const handleShare = async (fileUri: string) => {
         try {
-            const path = await saveToCache(base64Data, index);
             await Share.open({
-                url: `file://${path}`,
+                url: fileUri,
                 type: 'image/jpeg',
                 title: 'Share Handwriting Image',
                 failOnCancel: false,
             });
         } catch (error) {
             if (__DEV__) console.error('Share Error:', error);
+            const errorMessage = (error as Error)?.message || '';
+            if (!errorMessage.includes('cancel') && !errorMessage.includes('dismiss')) {
+                Alert.alert(
+                    'Share Failed',
+                    'Could not share the image. Please try again.',
+                    [{ text: 'OK' }]
+                );
+            }
         }
     };
 
-    const handleDownload = async (base64Data: string, index: number) => {
+    const handleDownload = async (fileUri: string, index: number) => {
         try {
             if (Platform.OS === 'android' && Platform.Version < 29) {
                 const granted = await PermissionsAndroid.request(
@@ -74,8 +74,6 @@ export default function OutputScreen() {
                 ? `${RNFS.DownloadDirectoryPath}/${fileName}`
                 : `${RNFS.DocumentDirectoryPath}/${fileName}`;
 
-            const data = base64Data.replace(/^data:image\/[a-z]+;base64,/, "");
-
             try {
                 // Ensure directory exists
                 const dirPath = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
@@ -83,7 +81,10 @@ export default function OutputScreen() {
                     await RNFS.mkdir(dirPath);
                 }
 
-                await RNFS.writeFile(downloadPath, data, 'base64');
+                // OPTIMIZATION: Copy file instead of writing base64
+                // Remove 'file://' prefix for RNFS operations if present
+                const sourcePath = fileUri.replace('file://', '');
+                await RNFS.copyFile(sourcePath, downloadPath);
 
                 if (Platform.OS === 'android') {
                     ToastAndroid.show(`Saved to Downloads/${fileName}`, ToastAndroid.LONG);
@@ -106,18 +107,100 @@ export default function OutputScreen() {
 
         } catch (error) {
             if (__DEV__) console.error('Download Error:', error);
-            Alert.alert('Error', 'Failed to process image: ' + (error as Error).message);
+            Alert.alert(
+                'Save Error',
+                'Failed to save the image. Please try again.',
+                [{ text: 'OK' }]
+            );
+        }
+    };
+
+    // Buffer for reading files back into base64 for PDF generation
+    const readFilesForPdf = async (): Promise<string[]> => {
+        const base64Images: string[] = [];
+        for (const uri of imagePaths) {
+            try {
+                const content = await RNFS.readFile(uri.replace('file://', ''), 'base64');
+                base64Images.push(`data:image/jpeg;base64,${content}`);
+            } catch (e) {
+                console.error('Failed to read cached image for PDF:', e);
+                // Continue with other images or throw? 
+                // Currently continue, but PDF might have missing pages.
+            }
+        }
+        return base64Images;
+    };
+
+    const handleSharePdf = async (base64Data: string) => {
+        try {
+            const fileName = `handwriting_${Date.now()}.pdf`;
+            const cachePath = `${RNFS.CachesDirectoryPath}/${fileName}`;
+            const cleanBase64 = base64Data.replace(/^data:application\/pdf;base64,/, "");
+
+            // For very large files, show a warning first
+            if (cleanBase64.length > 50 * 1024 * 1024) { // > 50MB
+                Alert.alert(
+                    'PDF Too Large',
+                    'This PDF is very large and may not save correctly. Try reducing the number of pages or using "Low" quality setting.',
+                    [{ text: 'OK' }]
+                );
+                setIsGeneratingPdf(false);
+                return;
+            }
+
+            await RNFS.writeFile(cachePath, cleanBase64, 'base64');
+
+            await Share.open({
+                url: `file://${cachePath}`,
+                type: 'application/pdf',
+                title: 'Share PDF',
+                failOnCancel: false,
+            });
+        } catch (error) {
+            if (__DEV__) console.error('PDF Share Error:', error);
+            const errorMessage = (error as Error)?.message || '';
+
+            if (errorMessage.includes('OOM') || errorMessage.includes('allocate')) {
+                Alert.alert(
+                    'PDF Too Large',
+                    'This PDF is too large for your device. Please try:\n\n• Fewer pages\n• "Low" quality setting\n• Saving individual images instead',
+                    [{ text: 'OK' }]
+                );
+            } else if (!errorMessage.includes('cancel') && !errorMessage.includes('dismiss')) {
+                Alert.alert(
+                    'Share Failed',
+                    'Could not share the PDF. Please try again.',
+                    [{ text: 'OK' }]
+                );
+            }
+        } finally {
+            setIsGeneratingPdf(false);
         }
     };
 
     const handleSavePdf = async (base64Data: string) => {
         try {
+            const LARGE_PDF_THRESHOLD = 15 * 1024 * 1024;
+            // Check if PDF is too large for direct file write
+            if (base64Data.length > LARGE_PDF_THRESHOLD) {
+                Alert.alert(
+                    'Large PDF Detected',
+                    'This PDF is too large to save directly. Opening Share menu instead - you can save to Files, Drive, or any app.',
+                    [{
+                        text: 'Share',
+                        onPress: () => handleSharePdf(base64Data)
+                    }]
+                );
+                return;
+            }
+
             if (Platform.OS === 'android' && Platform.Version < 29) {
                 const granted = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE
                 );
                 if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
                     Alert.alert('Permission Denied', 'Storage permission is required to save PDF.');
+                    setIsGeneratingPdf(false);
                     return;
                 }
             }
@@ -130,7 +213,6 @@ export default function OutputScreen() {
             const cleanBase64 = base64Data.replace(/^data:application\/pdf;base64,/, "");
 
             try {
-                // Ensure directory exists
                 const dirPath = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
                 if (!(await RNFS.exists(dirPath))) {
                     await RNFS.mkdir(dirPath);
@@ -150,44 +232,78 @@ export default function OutputScreen() {
                 }
             } catch (writeError) {
                 if (__DEV__) console.error('File Write Error:', writeError);
-                Alert.alert(
-                    'Save Failed',
-                    'Could not save directly to device. Please try using the "Share" button instead.',
-                    [{ text: 'OK' }]
-                );
+                const errMsg = (writeError as Error)?.message || '';
+
+                if (errMsg.includes('OOM') || errMsg.includes('allocate') || errMsg.includes('memory')) {
+                    // OOM error - show helpful message
+                    Alert.alert(
+                        'PDF Too Large',
+                        'This PDF is too large for your device memory.\n\nPlease try:\n• Generating fewer pages\n• Using "Low" quality setting\n• Saving individual images instead',
+                        [{ text: 'OK' }]
+                    );
+                } else {
+                    // Other write error - suggest Share
+                    Alert.alert(
+                        'Save Failed',
+                        'Could not save to Downloads. Try using Share to save to Drive or another app.',
+                        [{ text: 'OK' }]
+                    );
+                }
+                return;
             }
 
         } catch (error) {
             if (__DEV__) console.error('PDF Save Error:', error);
-            Alert.alert('Error', 'Failed to process PDF: ' + (error as Error).message);
+            Alert.alert(
+                'PDF Error',
+                'Failed to save PDF. Please try again.',
+                [{ text: 'OK' }]
+            );
         } finally {
             setIsGeneratingPdf(false);
         }
     };
 
-    const generatePdf = () => {
-        setIsGeneratingPdf(true);
-        webViewRef.current?.injectJavaScript(`
-            window.postMessage(JSON.stringify({
-                type: 'GENERATE_PDF',
-                images: ${JSON.stringify(images)}
-            }));
-        `);
-    };
+    const handlePdfGenerated = useCallback((base64Data: string) => {
+        handleSavePdf(base64Data);
+    }, []);
 
-    const handleMessage = (event: any) => {
+    const handlePdfError = useCallback((error: string, code?: string) => {
+        if (__DEV__) console.error('PDF Error:', error, code);
+        setIsGeneratingPdf(false);
+        Alert.alert(
+            'PDF Error',
+            'Failed to generate PDF. Please try again.',
+            [{ text: 'OK' }]
+        );
+    }, []);
+
+    // Use shared WebView context for PDF generation
+    const { downloadPDF } = usePdfOperations(
+        handlePdfGenerated,
+        undefined, // no text extraction on this screen
+        handlePdfError
+    );
+
+    const generatePdf = async () => {
+        setIsGeneratingPdf(true);
         try {
-            const data = JSON.parse(event.nativeEvent.data);
-            if (data.type === 'PDF_SUCCESS') {
-                handleSavePdf(data.data);
-            } else if (data.type === 'ERROR') {
-                if (__DEV__) console.error('WebView Error:', data.data);
-                setIsGeneratingPdf(false);
-                Alert.alert('Error', 'PDF Generation failed');
+            // Need to read files back to base64 for the WebView to generate PDF
+            // This is unavoidable as html2canvas/jsPDF run in WebView, but at least
+            // we controlled the memory usage up until this point.
+            if (imagePaths.length > 5 && Platform.OS === 'android') {
+                ToastAndroid.show('Preparing images for PDF...', ToastAndroid.SHORT);
             }
-        } catch (error) {
-            if (__DEV__) console.error('Error parsing message:', error);
+
+            const base64Images = await readFilesForPdf();
+            if (base64Images.length === 0) {
+                throw new Error("No images loaded");
+            }
+
+            downloadPDF(base64Images);
+        } catch (e) {
             setIsGeneratingPdf(false);
+            Alert.alert('Error', 'Failed to load images for PDF generation.');
         }
     };
 
@@ -199,7 +315,7 @@ export default function OutputScreen() {
             />
 
             <View style={[styles.header, { borderBottomColor: colors.border }]}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} accessibilityLabel="Go back" accessibilityRole="button">
                     <Text style={[styles.backButtonText, { color: colors.text }]}>← Back</Text>
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>Result</Text>
@@ -207,7 +323,7 @@ export default function OutputScreen() {
             </View>
 
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                {images.map((img, index) => (
+                {imagePaths.map((imgUri, index) => (
                     <View
                         key={index}
                         style={[
@@ -220,14 +336,16 @@ export default function OutputScreen() {
                         ]}
                     >
                         <Image
-                            source={{ uri: img }}
+                            source={{ uri: imgUri }}
                             style={styles.image}
                             resizeMode="contain"
                         />
                         <View style={styles.actionRow}>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: isDarkMode ? colors.surfaceHighlight : colors.surfaceHighlight }]}
-                                onPress={() => handleDownload(img, index)}
+                                onPress={() => handleDownload(imgUri, index)}
+                                accessibilityLabel={`Save image ${index + 1}`}
+                                accessibilityRole="button"
                             >
                                 <Text style={[styles.actionButtonText, { color: colors.text }]}>Save Image</Text>
                             </TouchableOpacity>
@@ -240,7 +358,9 @@ export default function OutputScreen() {
                                         borderColor: colors.border
                                     }
                                 ]}
-                                onPress={() => handleShare(img, index)}
+                                onPress={() => handleShare(imgUri)}
+                                accessibilityLabel={`Share image ${index + 1}`}
+                                accessibilityRole="button"
                             >
                                 <Text style={[styles.secondaryButtonText, { color: colors.textSecondary }]}>Share</Text>
                             </TouchableOpacity>
@@ -254,22 +374,17 @@ export default function OutputScreen() {
                     style={[styles.pdfButton, { backgroundColor: colors.primary }]}
                     onPress={generatePdf}
                     disabled={isGeneratingPdf}
+                    accessibilityLabel="Download as PDF"
+                    accessibilityHint="Combines all images into a single PDF file"
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: isGeneratingPdf }}
                 >
                     {isGeneratingPdf ? (
-                        <ActivityIndicator color={colors.onPrimary} />
+                        <ActivityIndicator color={colors.onPrimary} accessibilityLabel="Generating PDF" />
                     ) : (
                         <Text style={[styles.pdfButtonText, { color: colors.onPrimary }]}>Download as PDF</Text>
                     )}
                 </TouchableOpacity>
-            </View>
-
-            <View style={{ height: 0, opacity: 0 }}>
-                <WebView
-                    ref={webViewRef}
-                    source={{ html: getHtmlTemplate(), baseUrl: '' }}
-                    onMessage={handleMessage}
-                    javaScriptEnabled={true}
-                />
             </View>
         </SafeAreaView>
     );

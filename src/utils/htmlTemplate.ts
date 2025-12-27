@@ -12,6 +12,14 @@ export const getHtmlTemplate = () => `
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Content Security Policy: Restrict resources to prevent XSS -->
+    <meta http-equiv="Content-Security-Policy" 
+          content="default-src 'none'; 
+                   script-src 'unsafe-inline'; 
+                   style-src 'unsafe-inline' https://fonts.googleapis.com; 
+                   font-src https://fonts.gstatic.com data:; 
+                   img-src 'self' data: blob:;
+                   worker-src 'self' blob:;">
     <title>Handwriting Generator</title>
 
     <!-- Bundled Libraries -->
@@ -126,6 +134,31 @@ export const getHtmlTemplate = () => `
             display: flex;
             min-height: calc(100% - 50px);
         }
+
+        /* Spelling Mistakes Styles */
+        .mistake {
+            display: inline;
+        }
+        .crossed-word {
+            position: relative;
+            display: inline;
+            opacity: 0.7;
+        }
+        .crossed-word::after {
+            content: '';
+            position: absolute;
+            left: -2px;
+            right: -2px;
+            top: 45%;
+            height: 2px;
+            background: currentColor;
+            transform: rotate(-2deg);
+            border-radius: 1px;
+        }
+        .correction {
+            display: inline;
+            margin-left: 0.2em;
+        }
     </style>
 </head>
 <body>
@@ -143,14 +176,27 @@ export const getHtmlTemplate = () => `
     </div>
 
     <script>
-        // ============================================
-        // CONFIGURATION & DOM ELEMENTS
-        // ============================================
-        const pageEl = document.querySelector('.page-a');
-        const paperContentEl = document.querySelector('.page-a .paper-content');
-        const overlayEl = document.querySelector('.overlay');
-        
-        // PDF.js worker configuration handled above via Blob URL
+        // IIFE to encapsulate all state and prevent global pollution
+        (function() {
+            'use strict';
+            
+            // ============================================
+            // MODULE STATE (instead of window properties)
+            // ============================================
+            const state = {
+                storedOutputImages: [],
+                pdfDataBuffer: [],
+                pdfTransferId: null
+            };
+            
+            // ============================================
+            // CONFIGURATION & DOM ELEMENTS
+            // ============================================
+            const pageEl = document.querySelector('.page-a');
+            const paperContentEl = document.querySelector('.page-a .paper-content');
+            const overlayEl = document.querySelector('.overlay');
+            
+            // PDF.js worker configuration handled above via Blob URL
 
         // ============================================
         // UTILITY FUNCTIONS
@@ -173,6 +219,103 @@ export const getHtmlTemplate = () => `
          * Delay helper for async operations
          */
         const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        /**
+         * Generate a misspelled version of a word (returns a NEW string, does not modify input)
+         */
+        function generateMisspelling(originalWord) {
+            // Make a copy to work with
+            const word = String(originalWord);
+            if (word.length < 3) return word + word[0];
+            
+            // Pick a random strategy
+            const strategy = Math.floor(Math.random() * 4);
+            
+            switch(strategy) {
+                case 0: {
+                    // Swap two adjacent letters (not at the very end)
+                    const maxPos = Math.max(0, word.length - 2);
+                    const i = Math.floor(Math.random() * (maxPos + 1));
+                    const chars = word.split('');
+                    const temp = chars[i];
+                    chars[i] = chars[i + 1];
+                    chars[i + 1] = temp;
+                    return chars.join('');
+                }
+                case 1: {
+                    // Remove a letter from the middle (not first or last)
+                    if (word.length <= 3) return word.slice(0, -1);
+                    const i = 1 + Math.floor(Math.random() * (word.length - 2));
+                    return word.slice(0, i) + word.slice(i + 1);
+                }
+                case 2: {
+                    // Double a letter
+                    const i = Math.floor(Math.random() * word.length);
+                    return word.slice(0, i) + word[i] + word[i] + word.slice(i + 1);
+                }
+                case 3: {
+                    // Replace a vowel with nearby vowel
+                    const vowelMap = { 'a': 'e', 'e': 'i', 'i': 'o', 'o': 'u', 'u': 'a' };
+                    const chars = word.split('');
+                    for (let i = 0; i < chars.length; i++) {
+                        const lower = chars[i].toLowerCase();
+                        if (vowelMap[lower]) {
+                            const replacement = vowelMap[lower];
+                            chars[i] = chars[i] === chars[i].toUpperCase() ? replacement.toUpperCase() : replacement;
+                            return chars.join('');
+                        }
+                    }
+                    // No vowel found, just swap first two letters
+                    if (chars.length >= 2) {
+                        const temp = chars[0];
+                        chars[0] = chars[1];
+                        chars[1] = temp;
+                    }
+                    return chars.join('');
+                }
+                default:
+                    return word;
+            }
+        }
+
+        /**
+         * Apply spelling mistakes to text - shows crossed-out typo followed by correct word
+         */
+        function applySpellingMistakes(text, mistakeCount) {
+            if (!mistakeCount || mistakeCount <= 0) return sanitizeText(text);
+            
+            // Split into words while preserving whitespace
+            const parts = text.split(/(\\s+)/);
+            const wordIndices = [];
+            
+            // Find indices of actual words (not whitespace, min 4 chars for better effect)
+            parts.forEach((part, index) => {
+                if (part.trim() && part.length >= 4 && /^[a-zA-Z]+$/.test(part)) {
+                    wordIndices.push(index);
+                }
+            });
+            
+            // Randomly select unique words to make mistakes on
+            const mistakeIndices = new Set();
+            const actualMistakes = Math.min(mistakeCount, wordIndices.length);
+            const shuffled = [...wordIndices].sort(() => Math.random() - 0.5);
+            
+            for (let i = 0; i < actualMistakes; i++) {
+                mistakeIndices.add(shuffled[i]);
+            }
+            
+            // Build the result HTML
+            return parts.map((part, index) => {
+                if (mistakeIndices.has(index)) {
+                    // IMPORTANT: Store the original word FIRST before any processing
+                    const originalWord = String(part);
+                    const typo = generateMisspelling(originalWord);
+                    // Show: crossed-out typo + space + original correct word
+                    return '<span class="mistake"><span class="crossed-word">' + sanitizeText(typo) + '</span> ' + sanitizeText(originalWord) + '</span>';
+                }
+                return sanitizeText(part);
+            }).join('');
+        }
 
         /**
          * Apply contrast filter to image data (for scanner effect)
@@ -209,7 +352,7 @@ export const getHtmlTemplate = () => `
         // PAPER STYLING
         // ============================================
         
-        function applyPaperStyles(config) {
+        function applyPaperStyles(config, text) {
             try {
                 if (config.font) {
                     document.body.style.setProperty('--handwriting-font', config.font);
@@ -252,14 +395,18 @@ export const getHtmlTemplate = () => `
                     pageEl.classList.add('margined');
                 }
 
-                // Effects
+                // Effects - use deterministic angle based on text for consistent preview
                 overlayEl.className = 'overlay';
-                if (config.effect === 'scanner') {
+                if (config.effect === 'scanner' || config.effect === 'shadows') {
                     overlayEl.classList.add('shadows');
-                    overlayEl.style.background = 'linear-gradient(' + (Math.floor(Math.random() * 70) + 50) + 'deg, #0008, #0000)';
-                } else if (config.effect === 'shadows') {
-                    overlayEl.classList.add('shadows');
-                    overlayEl.style.background = 'linear-gradient(' + (Math.random() * 360) + 'deg, #0008, #0000)';
+                    // Generate consistent angle from text hash (simple hash function)
+                    const textHash = (text || '').split('').reduce((acc, char) => {
+                        return ((acc << 5) - acc) + char.charCodeAt(0);
+                    }, 0);
+                    const angle = config.effect === 'scanner' 
+                        ? (Math.abs(textHash % 70) + 50)  // 50-120 degrees for scanner
+                        : (Math.abs(textHash % 360));     // 0-360 for shadows
+                    overlayEl.style.background = 'linear-gradient(' + angle + 'deg, #0008, #0000)';
                 }
             } catch (error) {
                 sendError('Failed to apply styles: ' + error.message, 'STYLE_ERROR');
@@ -272,9 +419,14 @@ export const getHtmlTemplate = () => `
         
         async function updatePreview(text, config) {
             try {
-                applyPaperStyles(config);
-                // Use textContent for safety (prevents XSS)
-                paperContentEl.textContent = text || '';
+                applyPaperStyles(config, text);
+                // Apply spelling mistakes if enabled
+                if (config.spellingMistakes && config.spellingMistakes > 0) {
+                    paperContentEl.innerHTML = applySpellingMistakes(text || '', config.spellingMistakes);
+                } else {
+                    // Use textContent for safety (prevents XSS)
+                    paperContentEl.textContent = text || '';
+                }
                 await document.fonts.ready;
             } catch (error) {
                 sendError('Preview update failed: ' + error.message, 'PREVIEW_ERROR');
@@ -287,19 +439,24 @@ export const getHtmlTemplate = () => `
         
         async function generateImage(text, config) {
             try {
+                sendToRN('PROGRESS', { step: 'image', current: 0, total: 1, message: 'Preparing...' });
                 await updatePreview(text, config);
 
-                const resolution = config.resolution || 2;
                 const clientHeight = 842 - 50; // A4 height minus margins
                 const scrollHeight = paperContentEl.scrollHeight;
                 const totalPages = Math.ceil(scrollHeight / clientHeight);
                 const outputImages = [];
                 
                 if (totalPages > 1) {
-                    const words = text.split(/(\\s+)/);
+                    const words = text.split(/(\s+)/);
                     let wordCount = 0;
+                    const mistakesPerPage = config.spellingMistakes || 0;
+                    // Fix: Limit should be based on total words + buffer, not constant 1000
+                    const MAX_PAGINATION_ITERATIONS = Math.max(50000, words.length * 2);
+                    let totalIterations = 0;
                     
                     for (let i = 0; i < totalPages; i++) {
+                        sendToRN('PROGRESS', { step: 'image', current: i + 1, total: totalPages, message: 'Generating page ' + (i + 1) + ' of ' + totalPages });
                         paperContentEl.innerHTML = '';
                         const wordArray = [];
                         
@@ -307,38 +464,74 @@ export const getHtmlTemplate = () => `
                             wordArray.push(words[wordCount]);
                             paperContentEl.textContent = wordArray.join('');
                             wordCount++;
+                            totalIterations++; // Track total words processed
+                            
+                            // Safety: prevent infinite loops (e.g. if a single word is taller than page)
+                            if (totalIterations > MAX_PAGINATION_ITERATIONS) {
+                                sendError('Pagination failed. A single word might be too long to fit on a page.', 'PAGINATION_OVERFLOW');
+                                return;
+                            }
                         }
                         
                         if (paperContentEl.scrollHeight > clientHeight) {
                             wordArray.pop();
                             wordCount--;
+                        }
+                        
+                        // Safety: if no words fit on a page, we have a problem (extremely long word)
+                        if (wordArray.length === 0 && wordCount < words.length) {
+                            // Force add the word anyway to prevent infinite loop
+                            wordArray.push(words[wordCount]);
                             paperContentEl.textContent = wordArray.join('');
+                            wordCount++;
+                        }
+                        
+                        // Apply spelling mistakes if enabled for final render
+                        const pageText = wordArray.join('');
+                        if (mistakesPerPage > 0) {
+                            paperContentEl.innerHTML = applySpellingMistakes(pageText, mistakesPerPage);
+                        } else {
+                            paperContentEl.textContent = pageText;
                         }
                         
                         // Chunked: Wait before capture to prevent memory overload
                         await delay(50);
-                        await capturePage(outputImages, config, resolution);
+                        await capturePage(outputImages, config);
                     }
                 } else {
-                    await capturePage(outputImages, config, resolution);
+                    sendToRN('PROGRESS', { step: 'image', current: 1, total: 1, message: 'Generating image...' });
+                    await capturePage(outputImages, config);
                 }
                 
                 // Store for PDF generation
-                window.storedOutputImages = outputImages;
+                state.storedOutputImages = outputImages;
 
+                sendToRN('PROGRESS', { step: 'image', current: totalPages, total: totalPages, message: 'Complete!' });
                 sendToRN('SUCCESS', { images: outputImages });
             } catch (error) {
                 sendError('Image generation failed: ' + error.message, 'GENERATION_ERROR');
             }
         }
 
-        async function capturePage(outputImages, config, resolution) {
+        async function capturePage(outputImages, config) {
+            // Quality settings based on user preference
+            const qualitySettings = {
+                low: { scale: 1.5, jpegQuality: 0.7 },
+                medium: { scale: 2.0, jpegQuality: 0.85 },
+                high: { scale: 3.0, jpegQuality: 0.95 },
+            };
+            
+            const quality = config.quality || 'medium';
+            const settings = qualitySettings[quality] || qualitySettings.medium;
+            
             const options = {
                 scrollX: 0,
                 scrollY: -window.scrollY,
-                scale: resolution,
+                scale: settings.scale,
                 useCORS: true,
-                backgroundColor: null,
+                backgroundColor: '#ffffff',
+                logging: false,
+                removeContainer: true,
             };
             
             pageEl.style.border = 'none';
@@ -353,7 +546,7 @@ export const getHtmlTemplate = () => `
                 context.putImageData(imageData, 0, 0);
             }
             
-            outputImages.push(canvas.toDataURL('image/jpeg', 0.9));
+            outputImages.push(canvas.toDataURL('image/jpeg', settings.jpegQuality));
             
             pageEl.style.overflowY = 'auto';
             pageEl.style.border = '1px solid #f3f3f3';
@@ -363,12 +556,67 @@ export const getHtmlTemplate = () => `
         // PDF GENERATION
         // ============================================
         
-        function generatePDF(images) {
+        // Compress image to reduce size (for large PDFs)
+        function compressImage(dataUrl, quality) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    // Reduce dimensions for large docs
+                    const maxWidth = 1200;
+                    const maxHeight = 1700;
+                    let width = img.width;
+                    let height = img.height;
+                    
+                    if (width > maxWidth) {
+                        height = (height * maxWidth) / width;
+                        width = maxWidth;
+                    }
+                    if (height > maxHeight) {
+                        width = (width * maxHeight) / height;
+                        height = maxHeight;
+                    }
+                    
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, width, height);
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                };
+                img.onerror = function() {
+                    resolve(dataUrl); // Fall back to original
+                };
+                img.src = dataUrl;
+            });
+        }
+        
+        async function generatePDF(images) {
             try {
-                const imagesToUse = images || window.storedOutputImages || [];
+                const imagesToUse = images || state.storedOutputImages || [];
                 if (imagesToUse.length === 0) {
                     sendError('No images available for PDF generation', 'NO_IMAGES');
                     return;
+                }
+                
+                const pageCount = imagesToUse.length;
+                const needsCompression = pageCount > 3;
+                const compressionQuality = pageCount > 10 ? 0.3 : pageCount > 5 ? 0.4 : 0.5;
+                
+                sendToRN('PROGRESS', { step: 'pdf', current: 0, total: pageCount + 1, message: needsCompression ? 'Optimizing images...' : 'Creating PDF...' });
+                
+                // Compress images if needed for large docs
+                let processedImages = imagesToUse;
+                if (needsCompression) {
+                    processedImages = [];
+                    for (let i = 0; i < imagesToUse.length; i++) {
+                        sendToRN('PROGRESS', { step: 'pdf', current: i, total: pageCount + 1, message: 'Optimizing page ' + (i + 1) + '...' });
+                        const compressed = await compressImage(imagesToUse[i], compressionQuality);
+                        processedImages.push(compressed);
+                        // Free up memory
+                        await new Promise(r => setTimeout(r, 50));
+                    }
                 }
                 
                 const { jsPDF } = window.jspdf;
@@ -376,21 +624,30 @@ export const getHtmlTemplate = () => `
                 const width = doc.internal.pageSize.width;
                 const height = doc.internal.pageSize.height;
                 
-                for (let i = 0; i < imagesToUse.length; i++) {
+                for (let i = 0; i < processedImages.length; i++) {
+                    sendToRN('PROGRESS', { step: 'pdf', current: i + 1, total: pageCount + 1, message: 'Adding page ' + (i + 1) + ' of ' + pageCount });
                     if (i > 0) doc.addPage();
                     doc.addImage(
-                        imagesToUse[i],
+                        processedImages[i],
                         'JPEG',
                         25, 50,
                         width - 50, height - 80,
                         'image-' + i
                     );
+                    // Free memory between pages
+                    processedImages[i] = null;
+                    await new Promise(r => setTimeout(r, 10));
                 }
+                
+                sendToRN('PROGRESS', { step: 'pdf', current: pageCount, total: pageCount + 1, message: 'Finalizing PDF...' });
                 
                 const blob = doc.output('blob');
                 const reader = new FileReader();
                 reader.onloadend = function() {
+                    sendToRN('PROGRESS', { step: 'pdf', current: pageCount + 1, total: pageCount + 1, message: 'Complete!' });
                     sendToRN('PDF_SUCCESS', { data: reader.result });
+                    // Clean up stored images to free memory
+                    state.storedOutputImages = [];
                 };
                 reader.onerror = function() {
                     sendError('Failed to convert PDF blob', 'PDF_BLOB_ERROR');
@@ -407,6 +664,11 @@ export const getHtmlTemplate = () => `
         
         async function extractTextFromPDF(base64Data) {
             try {
+                if (!base64Data) {
+                    sendError('No PDF data provided', 'PDF_NO_DATA');
+                    return;
+                }
+
                 if (typeof pdfjsLib === 'undefined') {
                     sendError('PDF.js library not loaded. Please check internet connection.', 'PDFJS_NOT_LOADED');
                     return;
@@ -495,12 +757,34 @@ export const getHtmlTemplate = () => `
                     case 'EXTRACT_TEXT_FROM_PDF':
                         extractTextFromPDF(data.data);
                         break;
+                    case 'PDF_DATA_START':
+                        // Start a new transfer - clear any previous buffer
+                        state.pdfDataBuffer = [];
+                        state.pdfTransferId = data.transferId;
+                        break;
                     case 'PDF_DATA_CHUNK':
-                        if (!window.pdfDataBuffer) window.pdfDataBuffer = [];
-                        window.pdfDataBuffer.push(data.chunk);
+                        // Validate transfer ID to prevent interleaving
+                        if (data.transferId && state.pdfTransferId && data.transferId !== state.pdfTransferId) {
+                            // Stale chunk from old transfer, ignore
+                            break;
+                        }
+                        if (!state.pdfDataBuffer) state.pdfDataBuffer = [];
+                        state.pdfDataBuffer.push(data.chunk);
                         break;
                     case 'PDF_DATA_END':
-                        extractTextFromPDF(null);
+                        // Validate transfer ID
+                        if (data.transferId && state.pdfTransferId && data.transferId !== state.pdfTransferId) {
+                            // Stale end signal from old transfer, ignore
+                            break;
+                        }
+                        if (state.pdfDataBuffer && state.pdfDataBuffer.length > 0) {
+                            const fullData = state.pdfDataBuffer.join('');
+                            state.pdfDataBuffer = [];
+                            state.pdfTransferId = null;
+                            extractTextFromPDF(fullData);
+                        } else {
+                            sendError('No PDF data received', 'PDF_NO_DATA');
+                        }
                         break;
                     default:
                         // Ignore unknown message types
@@ -517,6 +801,8 @@ export const getHtmlTemplate = () => `
 
         // Signal that WebView is ready
         sendToRN('WEBVIEW_READY');
+        
+        })(); // End IIFE
     </script>
 </body>
 </html>

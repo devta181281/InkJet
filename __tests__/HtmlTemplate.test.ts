@@ -32,8 +32,8 @@ describe('HTML Template Generator', () => {
 
   it('should include the chunked PDF buffer handling', () => {
     const html = getHtmlTemplate();
-    expect(html).toContain('window.pdfDataBuffer = []');
-    expect(html).toContain('case \'PDF_DATA_CHUNK\':');
-    expect(html).toContain('window.pdfDataBuffer.push(data.chunk)');
+    expect(html).toContain('state.pdfDataBuffer = []');
+    expect(html).toContain("case 'PDF_DATA_CHUNK':");
+    expect(html).toContain('state.pdfDataBuffer.push(data.chunk)');
   });
 });

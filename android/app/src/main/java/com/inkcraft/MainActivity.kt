@@ -1,4 +1,4 @@
-package com.inkjet
+package com.inkcraft
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

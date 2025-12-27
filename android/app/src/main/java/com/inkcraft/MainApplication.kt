@@ -1,4 +1,4 @@
-package com.inkjet
+package com.inkcraft
 
 import android.app.Application
 import com.facebook.react.PackageList

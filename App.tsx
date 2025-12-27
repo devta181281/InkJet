@@ -6,6 +6,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import OutputScreen from './src/screens/OutputScreen';
 import StylingScreen from './src/screens/StylingScreen';
 import { ThemeProvider } from './src/context/ThemeContext';
+import { WebViewProvider } from './src/context/WebViewContext';
 import ErrorBoundary from './src/components/ErrorBoundary';
 
 const Stack = createNativeStackNavigator();
@@ -15,17 +16,19 @@ function App() {
     <ErrorBoundary>
       <SafeAreaProvider>
         <ThemeProvider>
-          <NavigationContainer>
-            <Stack.Navigator
-              screenOptions={{
-                headerShown: false,
-              }}
-            >
-              <Stack.Screen name="Home" component={HomeScreen} />
-              <Stack.Screen name="Styling" component={StylingScreen} />
-              <Stack.Screen name="Output" component={OutputScreen} />
-            </Stack.Navigator>
-          </NavigationContainer>
+          <WebViewProvider>
+            <NavigationContainer>
+              <Stack.Navigator
+                screenOptions={{
+                  headerShown: false,
+                }}
+              >
+                <Stack.Screen name="Home" component={HomeScreen} />
+                <Stack.Screen name="Styling" component={StylingScreen} />
+                <Stack.Screen name="Output" component={OutputScreen} />
+              </Stack.Navigator>
+            </NavigationContainer>
+          </WebViewProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </ErrorBoundary>
@@ -33,3 +36,4 @@ function App() {
 }
 
 export default App;
+

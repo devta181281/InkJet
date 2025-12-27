@@ -3,6 +3,7 @@ import { View, StyleSheet, Alert, Platform } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import NetInfo from '@react-native-community/netinfo';
 import { getHtmlTemplate } from '../utils/htmlTemplate';
+import { ErrorCode } from '../utils/errorUtils';
 
 export interface GenerationConfig {
     font?: string;
@@ -12,17 +13,18 @@ export interface GenerationConfig {
     effect?: 'shadows' | 'scanner' | 'no-effect';
     fontSize?: number;
     pageSize?: string;
-    resolution?: number;
     topPadding?: number;
     wordSpacing?: number;
     letterSpacing?: number;
+    quality?: 'low' | 'medium' | 'high';
+    spellingMistakes?: 0 | 3 | 5 | 10;
 }
 
 export interface HandwritingGeneratorRef {
     updatePreview: (text: string, config: GenerationConfig) => void;
     generateImage: (text: string, config: GenerationConfig) => void;
     downloadPDF: () => void;
-    extractTextFromPDF: (base64Data: string) => void;
+    // Note: PDF text extraction uses WebViewContext.usePdfOperations() instead
     isReady: () => boolean;
 }
 
@@ -119,31 +121,7 @@ const HandwritingGenerator = forwardRef<HandwritingGeneratorRef, Props>(
             downloadPDF: () => {
                 sendMessage({ type: 'GENERATE_PDF' });
             },
-            extractTextFromPDF: async (base64Data: string) => {
-                const CHUNK_SIZE = 500 * 1024; // 500KB
-                const totalLength = base64Data.length;
-
-                if (totalLength <= CHUNK_SIZE) {
-                    sendMessage({
-                        type: 'EXTRACT_TEXT_FROM_PDF',
-                        data: base64Data
-                    });
-                    return;
-                }
-
-                // Chunking to prevent OOM
-                for (let i = 0; i < totalLength; i += CHUNK_SIZE) {
-                    const chunk = base64Data.substring(i, i + CHUNK_SIZE);
-                    sendMessage({
-                        type: 'PDF_DATA_CHUNK',
-                        chunk: chunk
-                    });
-                    // Allow UI thread to breathe
-                    await new Promise<void>(resolve => setTimeout(resolve, 10));
-                }
-
-                sendMessage({ type: 'PDF_DATA_END' });
-            },
+            // Note: PDF text extraction uses WebViewContext.usePdfOperations() instead
             isReady: () => webViewReady
         }));
 
@@ -170,15 +148,43 @@ const HandwritingGenerator = forwardRef<HandwritingGeneratorRef, Props>(
                         onError?.(data.data, data.code);
 
                         // Show user-friendly error for specific cases
-                        if (data.code === 'PDF_PASSWORD_PROTECTED') {
-                            Alert.alert('Password Protected', data.data);
-                        } else if (data.code === 'PDF_INVALID') {
-                            Alert.alert('Invalid PDF', data.data);
-                        } else if (data.code === 'PDFJS_NOT_LOADED' || data.code === 'LIBRARY_NOT_LOADED') {
-                            Alert.alert(
-                                'Internet Required',
-                                'This feature requires an internet connection. Please connect and try again.'
-                            );
+                        // Note: WebView sends string codes, so we compare against both enum and string
+                        switch (data.code) {
+                            case ErrorCode.PDF_PASSWORD_PROTECTED:
+                            case 'PDF_PASSWORD_PROTECTED':
+                                Alert.alert('Password Protected', 'This PDF is password protected and cannot be processed.');
+                                break;
+                            case ErrorCode.PDF_INVALID:
+                            case 'PDF_INVALID':
+                                Alert.alert('Invalid PDF', 'The PDF file appears to be invalid or corrupted.');
+                                break;
+                            case ErrorCode.LIBRARY_NOT_LOADED:
+                            case 'LIBRARY_NOT_LOADED':
+                            case 'PDFJS_NOT_LOADED':
+                                Alert.alert(
+                                    'Internet Required',
+                                    'This feature requires an internet connection. Please connect and try again.'
+                                );
+                                break;
+                            case 'GENERATION_ERROR':
+                            case 'STYLE_ERROR':
+                                Alert.alert(
+                                    'Generation Failed',
+                                    'Failed to generate handwriting. Please try again.'
+                                );
+                                break;
+                            case 'PREVIEW_ERROR':
+                                // Silent - preview errors are usually recoverable
+                                break;
+                            default:
+                                if (data.code) {
+                                    // Generic error for any unhandled error codes
+                                    Alert.alert(
+                                        'Error',
+                                        'Something went wrong. Please try again.'
+                                    );
+                                }
+                                break;
                         }
                         break;
                     default:
